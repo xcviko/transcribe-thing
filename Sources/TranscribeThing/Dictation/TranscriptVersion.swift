@@ -15,8 +15,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case gigaam(GigaAMEngine.Variant)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
-    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash, Gemini 4
-    /// Hydrogen, Neon or Carbon; History keeps the retired Gemini 4 Argon's).
+    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash or Gemini 4
+    /// Neon; History keeps the retired Gemini 4 Hydrogen's, Carbon's and Argon's).
     case polish(by: EngineID = .geminiFlash)
     /// Polish Selection: the model's message from text selected in another app. No recording: the entry is this one
     /// version.
@@ -201,7 +201,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
     /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (Gemini 3.8 Flash's, as before there was a
     /// choice), "selection:geminiFlash", "selection:gpt6Luna", "translation", "translation:polished",
-    /// "translated-selection:geminiFlash". Another Gemini's polish or translation names it: "polish:geminiCarbon",
+    /// "translated-selection:geminiFlash". Another Gemini's polish or translation names it: "polish:geminiNeon",
     /// "translation:polished:geminiArgon", as the retired Gemini 4 Argon's in History are. Never rename. An older build
     /// can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps the
     /// text it tidied intact for them).

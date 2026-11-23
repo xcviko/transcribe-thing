@@ -318,24 +318,22 @@ import Testing
 
 /// What the dialog offers for files dropped on Home (`ImportChoices`), without the dialog.
 @Suite struct ImportChoicesTests {
-    /// The lineup the user has in Your models: GigaAM v3 main, then Gemini 4 Hydrogen, Gemini 3.8 Flash, Gemini 4
-    /// Carbon and Gemini 4 Neon, Neon switched on.
-    static let lineup = ModelLineup(order: [.gigaam, .hydrogen, .gemini, .carbon, .neon], main: .gigaam,
-                                    switchable: [.neon])
+    /// The lineup the user has in Your models: GigaAM v3 main, then Gemini 3.8 Flash and Gemini 4 Neon, Neon switched
+    /// on.
+    static let lineup = ModelLineup(order: [.gigaam, .gemini, .neon], main: .gigaam, switchable: [.neon])
 
     private static func kinds(_ choices: ImportChoices) -> [TranscriptVersionKind] {
         ImportChoices.Mode.allCases.flatMap { choices.rows($0) }.compactMap(\.kind)
     }
 
-    /// Every model, in the user's order, in every mode: five rows each, the main model's first and Return's. The alert
+    /// Every model, in the user's order, in every mode: three rows each, the main model's first and Return's. The alert
     /// this replaced showed three, in the app's order.
     @Test func theRowsFollowYourModels() {
         let choices = ImportChoices.make(lineup: Self.lineup) { _ in .ready }
         for mode in ImportChoices.Mode.allCases {
-            #expect(choices.rows(mode).map(\.model) == [.gigaam, .hydrogen, .gemini, .carbon, .neon], "\(mode)")
+            #expect(choices.rows(mode).map(\.model) == [.gigaam, .gemini, .neon], "\(mode)")
         }
-        #expect(choices.rows(.transcribe).map(\.kind) == [.gigaam(.v3), .transcription(.geminiHydrogen),
-                                                          .transcription(.geminiFlash), .transcription(.geminiCarbon),
+        #expect(choices.rows(.transcribe).map(\.kind) == [.gigaam(.v3), .transcription(.geminiFlash),
                                                           .transcription(.geminiNeon)])
         #expect(choices.rows(.transcribe).allSatisfy { $0.isEnabled })
         #expect(choices.defaultRow(.transcribe)?.kind == .gigaam(.v3))
@@ -351,7 +349,7 @@ import Testing
         var lineup = Self.lineup
         lineup.main = .gemini
         let choices = ImportChoices.make(lineup: lineup) { _ in .ready }
-        #expect(choices.rows(.transcribe).map(\.model) == [.gemini, .gigaam, .hydrogen, .carbon, .neon])
+        #expect(choices.rows(.transcribe).map(\.model) == [.gemini, .gigaam, .neon])
         #expect(choices.defaultRow(.transcribe)?.kind == .transcription(.geminiFlash))
         #expect(choices.defaultRow(.polish)?.kind == .polish(by: .geminiFlash))
         #expect(choices.defaultRow(.translate)?.kind == .translation(polished: false, by: .geminiFlash))
@@ -365,15 +363,12 @@ import Testing
         #expect(polish.first?.blocker == .geminiOnly("Polish"))
         #expect(polish.first?.reason == "Polish works on Gemini only")
         #expect(translate.first?.reason == "Translate works on Gemini only" && translate.first?.kind == nil)
-        #expect(polish.dropFirst().map(\.kind) == [.polish(by: .geminiHydrogen), .polish(by: .geminiFlash),
-                                                  .polish(by: .geminiCarbon), .polish(by: .geminiNeon)])
-        #expect(translate.dropFirst().map(\.kind) == [.translation(polished: false, by: .geminiHydrogen),
-                                                     .translation(polished: false, by: .geminiFlash),
-                                                     .translation(polished: false, by: .geminiCarbon),
+        #expect(polish.dropFirst().map(\.kind) == [.polish(by: .geminiFlash), .polish(by: .geminiNeon)])
+        #expect(translate.dropFirst().map(\.kind) == [.translation(polished: false, by: .geminiFlash),
                                                      .translation(polished: false, by: .geminiNeon)])
         #expect(Set((polish + translate).compactMap(\.kind)) == Set(TranscriptVersionKind.rewrites))
         #expect((polish + translate).filter { $0.isEnabled }.allSatisfy { $0.model.isGemini })
-        #expect(choices.defaultRow(.polish)?.model == .hydrogen, "Return: the first that can run")
+        #expect(choices.defaultRow(.polish)?.model == .gemini, "Return: the first that can run")
     }
 
     /// A model that can't run now keeps its row, saying why: GigaAM not downloaded, Gemini 4 Neon without its key.
@@ -386,12 +381,12 @@ import Testing
             }
         }
         let rows = choices.rows(.transcribe)
-        #expect(rows.map(\.model) == [.gigaam, .hydrogen, .gemini, .carbon, .neon])
+        #expect(rows.map(\.model) == [.gigaam, .gemini, .neon])
         #expect(rows[0].blocker == .engine("Not downloaded") && rows[0].reason == "Not downloaded" && !rows[0].isEnabled)
-        #expect(rows[4].blocker == .engine("Needs key") && rows[4].kind == .transcription(.geminiNeon))
-        #expect(choices.rows(.polish)[4].blocker == .engine("Needs key"))
+        #expect(rows[2].blocker == .engine("Needs key") && rows[2].kind == .transcription(.geminiNeon))
+        #expect(choices.rows(.polish)[2].blocker == .engine("Needs key"))
         #expect(choices.rows(.polish)[0].blocker == .geminiOnly("Polish"), "Gemini only says more than not downloaded")
-        #expect(choices.defaultRow(.transcribe)?.model == .hydrogen, "Return skips the main model that can't run")
+        #expect(choices.defaultRow(.transcribe)?.model == .gemini, "Return skips the main model that can't run")
         #expect(choices.canRun && choices.mainBlocker == .engine("Not downloaded"))
     }
 
@@ -518,7 +513,7 @@ import Testing
         let choices = ImportChoices.make(lineup: lineup, seconds: 2 * 3_600) { _ in .ready }
         for mode in ImportChoices.Mode.allCases {
             let gemini = choices.rows(mode).filter(\.model.isGemini)
-            #expect(gemini.map(\.model) == [.gemini, .hydrogen, .neon, .carbon], "\(mode)")
+            #expect(gemini.map(\.model) == [.gemini, .neon], "\(mode)")
             #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini && $0.kind != nil }, "\(mode)")
         }
         #expect(choices.rows(.transcribe).first?.reason == "Too long, GigaAM takes any length")

@@ -342,7 +342,7 @@ import Testing
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
             == "Press \(fnTab) while dictating to step from Flash to GigaAM.")
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+        #expect(lineup.order == [.gemini, .gigaam, .neon])
         #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
             == "Press \(rightCommand.spokenDescription) while dictating to step from Flash to GigaAM.")
     }

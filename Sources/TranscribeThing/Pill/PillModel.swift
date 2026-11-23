@@ -72,6 +72,10 @@ final class PillModel {
     /// The dictation on screen has its text, and it waits for an older one's to be pasted first: the processing pill
     /// shows a check and "ready" in place of its wave or its count, so it never looks like it's still being written.
     var isReady = false
+    /// The talk key went down over the dictation on screen and recorded nothing (an aimed press, `.processing` only):
+    /// its key ("fn"), and the pill says how to record, "fn again to dictate", in place of its wave, count or "ready",
+    /// until a key of the press goes to the dictation or the second press's window has passed. nil the rest of the time.
+    var secondPressKey: String?
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
     var engineChipPulse = 0 {
@@ -443,6 +447,12 @@ final class PillModel {
         if case .bottom = owner, !(visiblePhase.isRecording || visiblePhase == .processing) { return false }
         if case .stacked(let key) = owner, !stack.contains(where: { $0.key == key }) { return false }
         return openTray == owner || state.isAimed || PillToggle.allCases.contains { state.isOn($0) }
+    }
+
+    /// The stacked pill `key` is drawn small and dim (`PillStackMetrics.compactScale`): always, but while the pointer
+    /// has its tray open.
+    func isCompact(_ key: UUID) -> Bool {
+        openTray != .stacked(key)
     }
 
     /// The tray `owner` shows: the bottom pill's, or a stacked pill's.

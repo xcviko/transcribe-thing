@@ -30,8 +30,7 @@ import Testing
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
         #expect(menu(transcript()).actions.map(\.kind) == [.gigaam(.v3),
-                                                           .transcription(.geminiFlash), .transcription(.geminiHydrogen),
-                                                           .transcription(.geminiNeon), .transcription(.geminiCarbon)]
+                                                           .transcription(.geminiFlash), .transcription(.geminiNeon)]
                 + TranscriptVersionKind.rewrites)
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
@@ -53,8 +52,7 @@ import Testing
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
         #expect(proMenu.actions.map(\.kind) == [.gigaam(.v3), .transcription(.geminiFlash),
-                                                .transcription(.geminiHydrogen), .transcription(.geminiNeon),
-                                                .transcription(.geminiCarbon)]
+                                                .transcription(.geminiNeon)]
                 + TranscriptVersionKind.rewrites, "Pro's text isn't cleaned up either")
 
         var tidied = transcript()
@@ -63,8 +61,7 @@ import Testing
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
         #expect(tidiedMenu.actions.map(\.kind) == [.gigaam(.v3),
-                                                   .transcription(.geminiFlash), .transcription(.geminiHydrogen),
-                                                   .transcription(.geminiNeon), .transcription(.geminiCarbon)]
+                                                   .transcription(.geminiFlash), .transcription(.geminiNeon)]
                 + TranscriptVersionKind.rewrites)
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,

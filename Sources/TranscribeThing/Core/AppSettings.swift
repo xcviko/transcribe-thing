@@ -302,21 +302,15 @@ final class AppSettings {
         return lineup
     }
 
-    /// The stored hands-free model, read leniently. The removed Parakeet becomes GigaAM, and the removed Gemini 4
-    /// Argon Gemini 3.8 Flash (`ModelChoice.init(stored:)`), which `ModelLineup` turns on where they were. The removed
+    /// The stored hands-free model, read leniently. The removed Parakeet becomes GigaAM, the removed Gemini 4 Argon
+    /// Gemini 3.8 Flash, and the removed Gemini 4 Hydrogen and Carbon Gemini 4 Neon (`ModelChoice.init(stored:)`), which
+    /// `ModelLineup` turns on where they were. The removed
     /// clean-up was Parakeet's text tidied, so it becomes GigaAM too while Switch model reaches GigaAM (`ModelLineup`
     /// turns it on where clean-up was), and otherwise no model of its own: the main model, which is then GigaAM or
     /// one GigaAM was switched off for.
     nonisolated static func handsFreeModel(stored raw: String?, lineup: ModelLineup) -> ModelChoice? {
         guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(stored:)) }
         return lineup.steps.contains(.gigaam) ? .gigaam : nil
-    }
-
-    /// A Pasting rule's models from before Gemini 4 Carbon: Carbon checked where Gemini 3.8 Flash is.
-    nonisolated static func withCarbonLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
-        var models = models
-        if models.contains(.gemini) { models.insert(.carbon) } else { models.remove(.carbon) }
-        return models
     }
 
     /// A Pasting rule's models from before GigaAM: GigaAM checked where Parakeet was (`parakeet`: the rule as stored
@@ -327,16 +321,8 @@ final class AppSettings {
         return models
     }
 
-    /// A Pasting rule's models from before Gemini 4 Hydrogen: Hydrogen checked where Gemini 3.8 Flash is, the model
-    /// it's most like.
-    nonisolated static func withHydrogenLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
-        var models = models
-        if models.contains(.gemini) { models.insert(.hydrogen) } else { models.remove(.hydrogen) }
-        return models
-    }
-
-    /// A Pasting rule's models from before Gemini 4 Neon: Neon checked where Gemini 3.8 Flash is, as Hydrogen and
-    /// Carbon started.
+    /// A Pasting rule's models from before Gemini 4 Neon: Neon checked where Gemini 3.8 Flash is, the Gemini there was
+    /// then.
     nonisolated static func withNeonLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
         var models = models
         if models.contains(.gemini) { models.insert(.neon) } else { models.remove(.neon) }
@@ -474,15 +460,11 @@ final class AppSettings {
         }
         store.remove(.addSpaceAfterText)
         store.remove(.removeFinalPeriod)
-        // Gemini 4 Argon, which was given Gemini 3.8 Flash's Pasting rules once, is gone: so is the mark of that.
+        // Gemini 4 Argon, Carbon and Hydrogen, which were given Gemini 3.8 Flash's Pasting rules once, are gone: so are
+        // the marks of that.
         store.remove(.argonPastingAdded)
-        // Gemini 4 Carbon arrived after Pasting's rules were picked per model: it starts with Gemini 3.8 Flash's, once.
-        // Changed after that, it keeps its own.
-        if store.bool(.carbonPastingAdded) != true {
-            modelsAddingSpace = Self.withCarbonLikeFlash(modelsAddingSpace)
-            modelsRemovingFinalPeriod = Self.withCarbonLikeFlash(modelsRemovingFinalPeriod)
-            store.set(true, .carbonPastingAdded)
-        }
+        store.remove(.carbonPastingAdded)
+        store.remove(.hydrogenPastingAdded)
         // GigaAM arrived after that too: it starts with Parakeet's, once, and keeps its own from then on (Parakeet's
         // went with it).
         if store.bool(.gigaamPastingAdded) != true {
@@ -491,13 +473,7 @@ final class AppSettings {
                                                                     parakeet: parakeetRemovesFinalPeriod)
             store.set(true, .gigaamPastingAdded)
         }
-        // Gemini 4 Hydrogen arrived after GigaAM: it starts with Gemini 3.8 Flash's, once, then keeps its own.
-        if store.bool(.hydrogenPastingAdded) != true {
-            modelsAddingSpace = Self.withHydrogenLikeFlash(modelsAddingSpace)
-            modelsRemovingFinalPeriod = Self.withHydrogenLikeFlash(modelsRemovingFinalPeriod)
-            store.set(true, .hydrogenPastingAdded)
-        }
-        // Gemini 4 Neon arrived after Hydrogen: it starts with Gemini 3.8 Flash's, once, then keeps its own.
+        // Gemini 4 Neon arrived after GigaAM: it starts with Gemini 3.8 Flash's, once, then keeps its own.
         if store.bool(.neonPastingAdded) != true {
             modelsAddingSpace = Self.withNeonLikeFlash(modelsAddingSpace)
             modelsRemovingFinalPeriod = Self.withNeonLikeFlash(modelsRemovingFinalPeriod)
@@ -680,11 +656,11 @@ enum SettingsKey: String, CaseIterable {
     case callModel, callReasoningEfforts
     /// Set once Pasting's rules had given the removed Gemini 4 Argon Gemini 3.8 Flash's checks; removed at load.
     case argonPastingAdded
-    /// Set once Pasting's rules have given Gemini 4 Carbon Gemini 3.8 Flash's checks (`load`).
+    /// Set once Pasting's rules had given the removed Gemini 4 Carbon Gemini 3.8 Flash's checks; removed at load.
     case carbonPastingAdded
     /// Set once Pasting's rules have given GigaAM Parakeet's checks (`load`), which went with Parakeet since.
     case gigaamPastingAdded
-    /// Set once Pasting's rules have given Gemini 4 Hydrogen Gemini 3.8 Flash's checks (`load`).
+    /// Set once Pasting's rules had given the removed Gemini 4 Hydrogen Gemini 3.8 Flash's checks; removed at load.
     case hydrogenPastingAdded
     /// Set once Pasting's rules have given Gemini 4 Neon Gemini 3.8 Flash's checks (`load`).
     case neonPastingAdded

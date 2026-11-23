@@ -4,7 +4,7 @@ import Foundation
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
 ///     transcribe-thing --transcribe <audio file>
-///            --engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon
+///            --engine gigaam|geminiFlash|geminiNeon
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
 ///            [--upload wav|m4a]
 ///     transcribe-thing --model-status
@@ -110,7 +110,7 @@ enum EngineCLI {
     struct Options: Equatable {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
-        --engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon \
+        --engine gigaam|geminiFlash|geminiNeon \
         [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a]
                transcribe-thing --model-status
         """
@@ -199,9 +199,7 @@ enum EngineCLI {
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "gigaam", "gigaamv3": return .gigaam
             case "geminiflash", "flash": return .geminiFlash
-            case "geminihydrogen", "hydrogen", "gemini4hydrogen": return .geminiHydrogen
             case "geminineon", "neon", "gemini4neon": return .geminiNeon
-            case "geminicarbon", "carbon", "gemini4carbon": return .geminiCarbon
             default: return nil
             }
         }
@@ -609,9 +607,9 @@ enum EngineCLI {
             + "\(Fmt.bytes(bytes)) on disk · \(path)"
     }
 
-    /// The cloud models `--transcribe --engine` takes, one line each: "geminiCarbon    Gemini 4 Carbon
-    /// google/gemini-4-carbon · effort low|medium|high (default low)". The columns leave two spaces after the longest
-    /// ("geminiHydrogen", "Gemini 4 Hydrogen").
+    /// The cloud models `--transcribe --engine` takes, one line each: "geminiFlash  Gemini 3.8 Flash
+    /// google/gemini-3.8-flash · effort low|medium|high (default medium)". The columns are 16 and 19 wide, as they
+    /// were for the longest names Geminis have had ("geminiHydrogen", "Gemini 4 Hydrogen").
     static func cloudModelLines() -> [String] {
         EngineID.geminiEngines.map { id in
             let efforts = id.reasoningEfforts.map(\.rawValue).joined(separator: "|")

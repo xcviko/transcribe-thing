@@ -22,16 +22,6 @@ enum HubSnapshots {
             hub("hub-models-compact-high", .models, width: 820, height: 1400) { c in
                 c.settings.reasoningEfforts[.geminiFlash] = .high
             },
-            // The narrowest window with Gemini 4 Carbon switched on and thinking at High.
-            hub("hub-models-compact-carbon", .models, width: 820, height: 1100) { c in
-                c.settings.lineup.setSwitchable(.carbon, true)
-                c.settings.reasoningEfforts[.geminiCarbon] = .high
-            },
-            // The narrowest window with Gemini 4 Hydrogen switched on and thinking at High.
-            hub("hub-models-compact-hydrogen", .models, width: 820, height: 1100) { c in
-                c.settings.lineup.setSwitchable(.hydrogen, true)
-                c.settings.reasoningEfforts[.geminiHydrogen] = .high
-            },
             // The narrowest window with Gemini 4 Neon switched on and thinking at High.
             hub("hub-models-compact-neon", .models, width: 820, height: 1200) { c in
                 c.settings.lineup.setSwitchable(.neon, true)
@@ -88,9 +78,9 @@ enum HubSnapshots {
                 c.previewDropTarget = true
             },
             // What the files dropped are made into, and by which model (`--only hub-import`), for the lineup the user
-            // has: GigaAM main, then Hydrogen, Flash, Carbon and Neon. One file, Transcribe picked; Polish picked, GigaAM
-            // dimmed in its place; a file longer than Gemini takes; GigaAM not downloaded, Return on Hydrogen; three
-            // files at once.
+            // has: GigaAM main, then Flash and Neon. One file, Transcribe picked; Polish picked, GigaAM dimmed in its
+            // place; a file longer than Gemini takes; GigaAM not downloaded, Return on the first Gemini; three files at
+            // once.
             importDialog("hub-import", files: [("Standup 2026-10-09.m4a", 12 * 60 + 34)]),
             importDialog("hub-import-polish", files: [("Standup 2026-10-09.m4a", 12 * 60 + 34)], mode: .polish),
             importDialog("hub-import-too-long", files: [("Podcast, episode 112.mp3", 2 * 3_600 + 14 * 60)]),
@@ -130,11 +120,13 @@ enum HubSnapshots {
             hub("hub-home-selections", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.selectionEntries() + c.history.entries)
             },
-            // Dictations by Gemini 4 Carbon, one polished: its C glyph in Carbon's blue.
+            // Dictations by the retired Gemini 4 Carbon, one polished: its C glyph, in the orange of Neon, which took its
+            // place.
             hub("hub-home-carbon", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.carbonEntries() + c.history.entries)
             },
-            // Dictations by Gemini 4 Hydrogen, one polished: its H glyph in Hydrogen's pink.
+            // Dictations by the retired Gemini 4 Hydrogen, one polished: its H glyph, in the orange of Neon, which took its
+            // place.
             hub("hub-home-hydrogen", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.hydrogenEntries() + c.history.entries)
             },
@@ -357,28 +349,11 @@ enum HubSnapshots {
             hub("hub-models-full", .models, height: 1080),
             // Hands-free switches to Gemini.
             hub("hub-models-hands-free", .models, height: 1080) { c in c.settings.handsFreeModel = .gemini },
-            // Gemini 4 Carbon switched on, thinking at its default (Low), and hands-free's model; Flash at High.
-            hub("hub-models-carbon", .models, height: 1100) { c in
-                c.settings.lineup.setSwitchable(.carbon, true)
-                c.settings.handsFreeModel = .carbon
-                c.settings.reasoningEfforts[.geminiFlash] = .high
-            },
-            // Gemini 4 Hydrogen switched on, thinking at its default (Medium), and hands-free's model; Flash at Low.
-            hub("hub-models-hydrogen", .models, height: 1100) { c in
-                c.settings.lineup.setSwitchable(.hydrogen, true)
-                c.settings.handsFreeModel = .hydrogen
-                c.settings.reasoningEfforts[.geminiFlash] = .low
-            },
-            // Gemini 4 Hydrogen as the main model: GigaAM gets a switch, and GigaAM and Flash stay in the cycle.
-            hub("hub-models-main-hydrogen", .models, height: 1100) { c in
-                c.settings.lineup.main = .hydrogen
-            },
-            // Gemini 4 Neon switched on beside Hydrogen, thinking at its default (Low), and hands-free's model: the two
-            // new colors side by side.
+            // Gemini 4 Neon switched on, thinking at its default (Low), and hands-free's model; Flash at High.
             hub("hub-models-neon", .models, height: 1200) { c in
-                c.settings.lineup.setSwitchable(.hydrogen, true)
                 c.settings.lineup.setSwitchable(.neon, true)
                 c.settings.handsFreeModel = .neon
+                c.settings.reasoningEfforts[.geminiFlash] = .high
             },
             // Gemini 4 Neon as the main model: GigaAM gets a switch, and GigaAM and Flash stay in the cycle.
             hub("hub-models-main-neon", .models, height: 1200) { c in
@@ -498,10 +473,6 @@ enum HubSnapshots {
             hub("hub-models-main-gemini", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
             },
-            // Gemini 4 Carbon as the main model: GigaAM gets a switch, and GigaAM and Flash stay in the cycle.
-            hub("hub-models-main-carbon", .models, height: 1100) { c in
-                c.settings.lineup.main = .carbon
-            },
             // Dragged into Gemini, GigaAM: the line follows the new order from the main model.
             hub("hub-models-reordered", .models, height: 1100) { c in
                 c.settings.lineup.move(.gemini, to: 0)
@@ -592,7 +563,7 @@ enum HubSnapshots {
             hub("hub-dictionary-empty", .dictionary, height: 560),
             // Pasting set per model: quick GigaAM searches go in bare, the Geminis get a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .neon, .carbon]
+                c.settings.modelsAddingSpace = [.gemini, .neon]
                 c.settings.modelsRemovingFinalPeriod = [.gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -612,9 +583,9 @@ enum HubSnapshots {
                 c.settings.pillMode = .always
                 c.settings.soundsEnabled = false
             },
-            // The narrowest window: Pasting's chips still fit under each rule, a column for each of the five models.
+            // The narrowest window: Pasting's chips still fit under each rule, a column for each model.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .neon, .carbon]
+                c.settings.modelsAddingSpace = [.gemini, .neon]
                 c.settings.modelsRemovingFinalPeriod = [.gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -739,10 +710,8 @@ enum HubSnapshots {
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
 
-        /// The user's Your models: GigaAM v3 main, then Gemini 4 Hydrogen, Gemini 3.8 Flash, Gemini 4 Carbon and Gemini
-        /// 4 Neon, Neon switched on.
-        static let usersLineup = ModelLineup(order: [.gigaam, .hydrogen, .gemini, .carbon, .neon], main: .gigaam,
-                                             switchable: [.neon])
+        /// The user's Your models: GigaAM v3 main, then Gemini 3.8 Flash and Gemini 4 Neon, Neon switched on.
+        static let usersLineup = ModelLineup(order: [.gigaam, .gemini, .neon], main: .gigaam, switchable: [.neon])
 
         /// The fixture calls (`PreviewFixtures.calls`).
         @MainActor static func calls(_ context: HubContext) {
@@ -807,7 +776,7 @@ enum HubSnapshots {
         @MainActor static func pickColors(_ context: HubContext) {
             context.settings.modelColors[.gigaam] = .teal
             context.settings.modelColors[.gemini] = .blue
-            context.settings.modelColors[.carbon] = .orange
+            context.settings.modelColors[.neon] = .pink
         }
 
         @MainActor static func updates(_ context: HubContext, releases: [Release] = PreviewFixtures.releases(),

@@ -842,19 +842,6 @@ private struct PillModelSheet: View {
                 Self.model(.processing, choice: .gemini, chip: false)
                     .previewCounter(PillTokenCount(phase: .writing, tokens: 17_700))
             },
-            Row(id: "hydrogen", caption: "Push-to-talk · Gemini 4 Hydrogen") {
-                Self.model(.listening, choice: .hydrogen)
-            },
-            Row(id: "hydrogen-later", caption: "Gemini 4 Hydrogen · chip gone") {
-                Self.model(.listening, choice: .hydrogen, chip: false)
-            },
-            Row(id: "locked-hydrogen", caption: "Hands-free · Gemini 4 Hydrogen") {
-                Self.model(.locked, choice: .hydrogen, level: 0.5)
-            },
-            Row(id: "processing-thinking-hydrogen", caption: "Thinking · Gemini 4 Hydrogen") {
-                Self.model(.processing, choice: .hydrogen, chip: false)
-                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 3_100))
-            },
             Row(id: "neon", caption: "Push-to-talk · Gemini 4 Neon") { Self.model(.listening, choice: .neon) },
             Row(id: "neon-later", caption: "Gemini 4 Neon · chip gone") {
                 Self.model(.listening, choice: .neon, chip: false)
@@ -865,17 +852,6 @@ private struct PillModelSheet: View {
             Row(id: "processing-thinking-neon", caption: "Thinking · Gemini 4 Neon") {
                 Self.model(.processing, choice: .neon, chip: false)
                     .previewCounter(PillTokenCount(phase: .thinking, tokens: 4_600))
-            },
-            Row(id: "carbon", caption: "Push-to-talk · Gemini 4 Carbon") { Self.model(.listening, choice: .carbon) },
-            Row(id: "carbon-later", caption: "Gemini 4 Carbon · chip gone") {
-                Self.model(.listening, choice: .carbon, chip: false)
-            },
-            Row(id: "locked-carbon", caption: "Hands-free · Gemini 4 Carbon") {
-                Self.model(.locked, choice: .carbon, level: 0.5)
-            },
-            Row(id: "processing-thinking-carbon", caption: "Thinking · Gemini 4 Carbon") {
-                Self.model(.processing, choice: .carbon, chip: false)
-                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 9_800))
             },
             Row(id: "locked-gigaam", caption: "Hands-free · GigaAM v3") {
                 Self.model(.locked, choice: .gigaam, level: 0.5)
@@ -1321,8 +1297,7 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.gigaam, .gemini), (.gemini, .hydrogen), (.hydrogen, .neon),
-                                                       (.neon, .carbon), (.carbon, .gigaam)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.gigaam, .gemini), (.gemini, .neon), (.neon, .gigaam)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {

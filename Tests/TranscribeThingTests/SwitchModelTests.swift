@@ -748,12 +748,12 @@ import Testing
     @Test func theKeyNoticeNamesWhatItBlocks() {
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).title
             == "Flash needs an OpenRouter key")
-        #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.hydrogen]).title
-            == "Hydrogen needs an OpenRouter key")
+        #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.neon]).title
+            == "Neon needs an OpenRouter key")
         #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.gemini]).title
             == "Flash needs OpenRouter credit")
-        let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.hydrogen, .gemini])
-        #expect(all.title == "Hydrogen and Flash need an OpenRouter key")
+        let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.neon, .gemini])
+        #expect(all.title == "Neon and Flash need an OpenRouter key")
         #expect(all.body == "OpenRouter rejected yours. Update it to switch models.")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).body
             == "Add one to switch models while dictating.")

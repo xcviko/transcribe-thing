@@ -2,9 +2,9 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// Gemini 4 Neon, the middle of the Gemini 4 family, between Hydrogen and Carbon: its engine and choice, its Reasoning
-// levels and stall timeout, the lineup and Pasting rules it joins, its requests, the pill's estimate, the CLI and
-// dictations on it.
+// Gemini 4 Neon, the Gemini 4 beside Gemini 3.8 Flash (Hydrogen and Carbon are gone): its engine and choice, its
+// Reasoning levels and stall timeout, the lineup and Pasting rules it joins, its requests, the pill's estimate, the
+// CLI and dictations on it.
 
 private func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
     let suite = "transcribe-thing-tests-\(UUID().uuidString)"
@@ -25,22 +25,22 @@ private func json(_ body: Data) throws -> [String: Any] {
 // MARK: - Engine and choice
 
 @Suite struct NeonModelTests {
-    @Test func neonIsAGeminiOfItsOwnBetweenHydrogenAndCarbon() {
+    @Test func neonIsAGeminiOfItsOwnAfterFlash() {
         #expect(EngineID.geminiNeon.rawValue == "geminiNeon" && ModelChoice.neon.rawValue == "neon")
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
-        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .hydrogen, .neon, .carbon])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiNeon])
+        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .neon])
         let neon = EngineID.geminiNeon
         #expect(neon.isGemini && neon.isCloud && !neon.isLocal && !neon.isRetired)
         #expect(neon.modelName == "Gemini 4 Neon" && neon.displayName == "Gemini 4 Neon")
         #expect(neon.shortName == "Gemini 4 Neon" && neon.glyph == "N")
         #expect(neon.openRouterModelID == "google/gemini-4-neon" && neon.provider == "Google AI Studio")
         #expect(neon.providerLine == "Google · via OpenRouter" && neon.badges == ["Cloud"])
-        #expect(neon.factLine == "Newest · between Hydrogen and Carbon · about 3.6× Flash’s price per token")
+        #expect(neon.factLine == "Newer than Flash · about 3.6× Flash’s price per token")
         #expect(neon.approxDownloadBytes == nil)
         #expect(OpenRouterClient.engine(forModel: "google/gemini-4-neon") == .geminiNeon)
         #expect(ModelChoice.neon.modelName == "Gemini 4 Neon" && ModelChoice.neon.shortName == "Neon")
         #expect(ModelChoice.neon.chipName == "Gemini 4 Neon" && ModelChoice.neon.compactName == "Gemini 4 Neon")
-        #expect(ModelChoice.sentenceList([.hydrogen, .neon, .carbon]) == ("Hydrogen, Neon and Carbon", true))
+        #expect(ModelChoice.sentenceList([.gemini, .neon]) == ("Flash and Neon", true))
     }
 
     /// A lamp and a glyph of its own: no other model's symbol, letter or default color.
@@ -54,12 +54,14 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(!others.map(\.defaultColor).contains(.orange))
     }
 
-    /// Neon is Neon wherever a job or History names it; Flash stays Gemini, Hydrogen and Carbon their own.
+    /// Neon is Neon wherever a job or History names it, and so are the removed Hydrogen and Carbon; Flash stays
+    /// Gemini.
     @Test func choicesAndEnginesMapBothWays() {
         #expect(ModelChoice(engine: .geminiNeon) == .neon && ModelChoice.neon.engine == .geminiNeon)
-        #expect(ModelChoice(engine: .geminiFlash) == .gemini && ModelChoice(engine: .geminiHydrogen) == .hydrogen)
-        #expect(ModelChoice(engine: .geminiCarbon) == .carbon)
-        #expect(ModelChoice(stored: "neon") == .neon)
+        #expect(ModelChoice(engine: .geminiFlash) == .gemini && ModelChoice(engine: .geminiHydrogen) == .neon)
+        #expect(ModelChoice(engine: .geminiCarbon) == .neon)
+        #expect(ModelChoice(stored: "neon") == .neon && ModelChoice(stored: "hydrogen") == .neon)
+        #expect(ModelChoice(stored: "carbon") == .neon && ModelChoice(stored: "argon") == .gemini)
         #expect(ModelChoice.read(["gemini", "neon"]) == [.gemini, .neon])
     }
 
@@ -78,20 +80,19 @@ private func json(_ body: Data) throws -> [String: Any] {
                 == [.polish(by: .geminiNeon), .translation(polished: false, by: .geminiNeon)])
     }
 
-    /// Neon offers Low, Medium, High and xHigh, never Minimal (not known to work) or None, and thinks at Low until
+    /// Neon offers Low, Medium and High, never Minimal (not known to work), None or xHigh, and thinks at Low until
     /// picked.
     @Test func neonThinksAtLowAndIsNotOfferedMinimal() {
-        #expect(EngineID.geminiNeon.reasoningEfforts == [.low, .medium, .high, .xhigh])
+        #expect(EngineID.geminiNeon.reasoningEfforts == [.low, .medium, .high])
         #expect(EngineID.geminiNeon.defaultReasoningEffort == .low)
         #expect(ReasoningEfforts.default[.geminiNeon] == .low)
-        #expect(ReasoningEfforts.default[.geminiHydrogen] == .medium && ReasoningEfforts.default[.geminiFlash] == .medium)
+        #expect(ReasoningEfforts.default[.geminiFlash] == .medium)
     }
 
-    /// Five minutes of silence before it's a stall, as Carbon; an answer without tags is still words, as Flash's.
-    @Test func neonWaitsAsCarbonAndNeedsNoTags() {
-        #expect(EngineID.geminiNeon.cloudTimeout == 300 && EngineID.geminiCarbon.cloudTimeout == 300)
-        #expect(!EngineID.geminiNeon.answerNeedsTags)
-        #expect(EngineID.allCases.filter(\.answerNeedsTags) == [.geminiCarbon])
+    /// Five minutes of silence before it's a stall, as Carbon had; an answer without tags is still words, as Flash's.
+    @Test func neonWaitsAsCarbonDidAndNeedsNoTags() {
+        #expect(EngineID.geminiNeon.cloudTimeout == 300 && EngineID.geminiFlash.cloudTimeout == 120)
+        #expect(!EngineID.geminiNeon.answerNeedsTags && !EngineID.geminiFlash.answerNeedsTags)
     }
 
     /// A stored level for Neon is read; none leaves its Low; Minimal or None leaves its Low too.
@@ -100,8 +101,8 @@ private func json(_ body: Data) throws -> [String: Any] {
             try JSONDecoder().decode(ReasoningEfforts.self, from: Data(raw.utf8))
         }
         let old = try decode(#"{"geminiCarbon":"high","geminiFlash":"low","geminiHydrogen":"high"}"#)
-        #expect(old[.geminiNeon] == .low && old[.geminiHydrogen] == .high && old[.geminiCarbon] == .high,
-                "stored before Neon")
+        #expect(old[.geminiNeon] == .low && old[.geminiFlash] == .low, "stored before Neon")
+        #expect(old[.geminiHydrogen] == nil && old[.geminiCarbon] == nil, "the removed ones' levels are dropped")
         let picked = try decode(#"{"geminiFlash":"low","geminiNeon":"medium"}"#)
         #expect(picked[.geminiNeon] == .medium && picked[.geminiFlash] == .low)
         var levels = try decode(#"{"geminiNeon":"minimal"}"#)
@@ -112,7 +113,7 @@ private func json(_ body: Data) throws -> [String: Any] {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         #expect(String(decoding: try encoder.encode(ReasoningEfforts.default), as: UTF8.self)
-                == #"{"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium","geminiNeon":"low"}"#)
+                == #"{"geminiFlash":"medium","geminiNeon":"low"}"#)
     }
 
     /// When Neon can't answer, a dictation falls back to the models on this Mac, as from any Gemini.
@@ -125,33 +126,31 @@ private func json(_ body: Data) throws -> [String: Any] {
 
 @MainActor
 @Suite struct NeonSettingsTests {
-    /// A fresh install lists Neon between Hydrogen and Carbon, switched off: GigaAM v3 is the main model and Flash its
-    /// one step.
-    @Test func aFreshInstallListsNeonAfterHydrogenSwitchedOff() throws {
+    /// A fresh install lists Neon after Flash, switched off: GigaAM v3 is the main model and Flash its one step.
+    @Test func aFreshInstallListsNeonAfterFlashSwitchedOff() throws {
         try withDefaults { defaults in
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.order == [.gigaam, .gemini, .neon])
             #expect(settings.lineup.main == .gigaam && settings.lineup.cycle == [.gigaam, .gemini])
             #expect(!settings.lineup.isSwitchable(.neon))
-            #expect(settings.modelColors[.neon] == .orange && settings.modelColors[.hydrogen] == .pink)
+            #expect(settings.modelColors[.neon] == .orange && settings.modelColors[.gemini] == .violet)
             #expect(settings.reasoningEffort(for: .geminiNeon) == .low)
             #expect(LocalModel(engine: .geminiNeon) == nil && !settings.usesLocalModel(.geminiNeon))
         }
     }
 
-    /// A lineup stored before Neon (Hydrogen in it, as 0.5.3 stored it) gets Neon appended at the end, switched off:
-    /// nobody's fn ⇥ starts costing more by itself, and the main model, the order and hands-free stay.
-    @Test func aLineupFromBeforeNeonGetsItAppendedSwitchedOff() throws {
+    /// A lineup stored before Neon, with Hydrogen and Carbon in it as 0.5.3 stored them: Neon stands in for the removed
+    /// two, at Hydrogen's place and as the main model where Hydrogen was. Flash, GigaAM and hands-free stay.
+    @Test func aLineupFromBeforeNeonHasItForHydrogenAndCarbon() throws {
         try withDefaults { defaults in
             let old = #"{"main":"hydrogen","order":["parakeet","gemini","hydrogen","carbon","gigaam"],"switchable":["parakeet","gemini"]}"#
             defaults.set(Data(old.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("gemini", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .carbon, .neon])
-            #expect(settings.lineup.main == .hydrogen && settings.lineup.cycle == [.hydrogen, .gigaam, .gemini])
-            #expect(!settings.lineup.isSwitchable(.neon) && settings.handsFreeChoice == .gemini)
-            #expect(load(defaults).lineup.order == [.gigaam, .gemini, .hydrogen, .carbon, .neon],
-                    "stored as read")
+            #expect(settings.lineup.order == [.gigaam, .gemini, .neon])
+            #expect(settings.lineup.main == .neon && settings.lineup.cycle == [.neon, .gigaam, .gemini])
+            #expect(settings.handsFreeChoice == .gemini)
+            #expect(load(defaults).lineup.order == [.gigaam, .gemini, .neon], "stored as read")
         }
     }
 
@@ -177,14 +176,16 @@ private func json(_ body: Data) throws -> [String: Any] {
                 defaults.set(true, forKey: key.defaultsKey)
             }
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.modelsAddingSpace == [.gemini, .neon], "the removed Hydrogen's and Carbon's go")
             #expect(settings.modelsRemovingFinalPeriod == [.gigaam], "Parakeet's own goes with it")
+            #expect(defaults.object(forKey: SettingsKey.carbonPastingAdded.defaultsKey) == nil
+                    && defaults.object(forKey: SettingsKey.hydrogenPastingAdded.defaultsKey) == nil)
             #expect(settings.addsSpace(by: .neon, in: .pushToTalk))
             #expect(defaults.bool(forKey: SettingsKey.neonPastingAdded.defaultsKey))
             settings.modelsAddingSpace.remove(.neon)
             settings.modelsRemovingFinalPeriod.insert(.neon)
             let reloaded = load(defaults)
-            #expect(reloaded.modelsAddingSpace == [.gemini, .hydrogen, .carbon], "a choice made since stays")
+            #expect(reloaded.modelsAddingSpace == [.gemini], "a choice made since stays")
             #expect(reloaded.modelsRemovingFinalPeriod == [.neon, .gigaam])
         }
         // A fresh install has no rules to copy, and copies none later.
@@ -205,8 +206,6 @@ private func json(_ body: Data) throws -> [String: Any] {
             let reloaded = load(defaults)
             #expect(reloaded.reasoningEffort(for: .geminiNeon) == .high)
             #expect(reloaded.reasoningEffort(for: .geminiFlash) == .medium)
-            #expect(reloaded.reasoningEffort(for: .geminiHydrogen) == .medium)
-            #expect(reloaded.reasoningEffort(for: .geminiCarbon) == .low)
         }
     }
 }
@@ -224,21 +223,21 @@ private func json(_ body: Data) throws -> [String: Any] {
     private let speech = Recording(samples: [Float](repeating: 0.1, count: 16_000))
 
     /// Neon goes with its own slug, at its own default (Low) without the app's settings, pinned to Google AI Studio,
-    /// with Carbon's 5-minute stall timeout; what OpenRouter says it cost is kept.
+    /// with a 5-minute stall timeout (Flash's is 2); what OpenRouter says it cost is kept.
     @Test func neonGoesWithItsSlugLevelAndTimeout() async throws {
         let usage = #"{"prompt_tokens":400,"completion_tokens":120,"total_tokens":520,"cost":0.0030,"completion_tokens_details":{"reasoning_tokens":50}}"#
         let (service, host) = service([
             .stream(SSE.answer("<transcript>Neon.</transcript>", model: "google/gemini-4-neon",
                                provider: "Google AI Studio", usage: usage)),
-            .stream(SSE.answer("<transcript>Hydrogen.</transcript>")),
+            .stream(SSE.answer("<transcript>Flash.</transcript>")),
         ])
         let neon = try await service.transcribe(speech, engine: .geminiNeon)
-        let hydrogen = try await service.transcribe(speech, engine: .geminiHydrogen)
+        let flash = try await service.transcribe(speech, engine: .geminiFlash)
         #expect(neon.text == "Neon." && neon.engine == .geminiNeon && neon.reasoningEffort == .low)
         #expect(neon.costUSD == 0.0030 && neon.usage?.reasoningTokens == 50)
-        #expect(hydrogen.reasoningEffort == .medium)
+        #expect(flash.reasoningEffort == .medium)
         let bodies = try StubURLProtocol.registry.bodies(for: host).map(json)
-        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-4-neon", "google/gemini-4-hydrogen"])
+        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-4-neon", "google/gemini-3.8-flash"])
         #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["low", "medium"])
         #expect(bodies.allSatisfy { ($0["provider"] as? [String: Any])?["only"] as? [String] == ["google-ai-studio"] })
         #expect(StubURLProtocol.registry.requests(for: host).map(\.timeoutInterval) == [300, 120])
@@ -284,14 +283,14 @@ private func json(_ body: Data) throws -> [String: Any] {
         return TranscriptEntry(engine: .geminiNeon, audioDuration: 5, voicedSeconds: 4, versions: [version])
     }
 
-    /// Neon's count learns from Neon's own versions, never from Carbon's, and Carbon's never from Neon's.
+    /// Neon's count learns from Neon's own versions, never from Flash's, and Flash's never from Neon's.
     @Test func neonsEstimateIsItsOwn() throws {
         let neon = try #require(EngineID.geminiNeon.openRouterModelID)
-        let carbon = try #require(EngineID.geminiCarbon.openRouterModelID)
+        let flash = try #require(EngineID.geminiFlash.openRouterModelID)
         let entries = [entry(neon, reasoningTokens: 4_000, reasoningCharacters: 1_000),
-                       entry(carbon, reasoningTokens: 7_000, reasoningCharacters: 1_000)]
+                       entry(flash, reasoningTokens: 7_000, reasoningCharacters: 1_000)]
         #expect(TokenEstimate.learned(from: entries, modelID: neon).reasoningPerCharacter == 4)
-        #expect(TokenEstimate.learned(from: entries, modelID: carbon).reasoningPerCharacter == 7)
+        #expect(TokenEstimate.learned(from: entries, modelID: flash).reasoningPerCharacter == 7)
         #expect(TokenEstimate.learned(from: [entries[1]], modelID: neon) == TokenEstimate(),
                 "no Neon history yet: the defaults")
     }
@@ -309,17 +308,16 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(options("--engine", "neon")?.engine == .geminiNeon)
         #expect(options("--engine", "gemini-4-neon")?.engine == .geminiNeon)
         #expect(options("--engine", "geminiNeon", "--effort", "medium")?.effort == .medium)
-        #expect(EngineCLI.Options.usage
-                    .contains("--engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon "))
+        #expect(EngineCLI.Options.usage.contains("--engine gigaam|geminiFlash|geminiNeon "))
     }
 
-    /// `--model-status` lists it between Hydrogen and Carbon, its columns lined up with theirs.
+    /// `--model-status` lists it after Flash, its columns lined up with Flash's.
     @Test func modelStatusListsNeon() {
         let lines = EngineCLI.cloudModelLines()
-        #expect(lines.count == 4)
-        #expect(lines[2].hasPrefix("geminiNeon      Gemini 4 Neon      google/gemini-4-neon"))
-        #expect(lines[2].hasSuffix("effort low|medium|high|xhigh (default low)"))
-        #expect(lines[1].hasPrefix("geminiHydrogen ") && lines[3].hasPrefix("geminiCarbon "))
+        #expect(lines.count == 2)
+        #expect(lines[1].hasPrefix("geminiNeon      Gemini 4 Neon      google/gemini-4-neon"))
+        #expect(lines[1].hasSuffix("effort low|medium|high (default low)"))
+        #expect(lines[0].hasPrefix("geminiFlash     Gemini 3.8 Flash   google/gemini-3.8-flash"))
     }
 }
 
@@ -329,7 +327,7 @@ private func json(_ body: Data) throws -> [String: Any] {
 @Suite(.serialized) struct NeonDictationTests {
     typealias H = DictationControllerTests
 
-    /// fn ⇥ reaches Neon once it's switched on, in the lineup's order (after Flash; Hydrogen is off), and the
+    /// fn ⇥ reaches Neon once it's switched on, in the lineup's order (after Flash), and the
     /// dictation goes to it, pasted by Neon's own Pasting rules.
     @Test func switchModelStepsToNeon() async throws {
         let (rig, _) = SwitchModelControllerTests.make()
@@ -379,7 +377,7 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(entry.currentVersion.map(VersionDetails.lines)?.first == "Polished by Gemini 4 Neon")
     }
 
-    /// Neon isn't held to its tags, as Carbon is: an answer without them is still words, and is pasted.
+    /// Neon isn't held to its tags, as Carbon was: an answer without them is still words, and is pasted.
     @Test func neonsUntaggedAnswerIsPasted() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }

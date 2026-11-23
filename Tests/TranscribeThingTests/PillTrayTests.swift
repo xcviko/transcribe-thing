@@ -86,6 +86,24 @@ import Testing
         #expect(model.stackModels[a] === first, "the same model as it was")
     }
 
+    /// Stacked pills are small and dim, even with a button on, so the bottom one stands out; the one whose tray the
+    /// pointer opened is full size until the pointer leaves.
+    @Test func stackedPillsAreSmallUntilThePointerOpensOne() async throws {
+        let model = Self.model(.listening)
+        let a = UUID(), b = UUID()
+        model.setStack([
+            PillStackItem(key: a, choice: .gemini, tray: PillTrayState(dictation: .processing(a), sends: true)),
+            PillStackItem(key: b, choice: .gemini, tray: PillTrayState(dictation: .processing(b))),
+        ])
+        #expect(model.isCompact(a) && model.isCompact(b))
+        #expect(model.showsTray(.stacked(a)), "Send on shows its tray, small with it")
+        model.setPointerOverTray(.stacked(b))
+        try await waitUntil { !model.isCompact(b) }
+        #expect(model.isCompact(a))
+        model.setPointerOverTray(nil)
+        #expect(model.isCompact(b))
+    }
+
     /// Clicks on tray buttons go to the controller with the pill's dictation.
     @Test func aClickNamesItsDictation() {
         let model = Self.model(.processing)
@@ -97,12 +115,14 @@ import Testing
         #expect(clicked.count == 1 && clicked[0].0 == .send && clicked[0].1 == .processing(key))
     }
 
-    /// The stack's height for the toasts: three pills, then "+N".
+    /// The stack's height for the toasts: three small pills, room for one grown under the pointer, then "+N".
     @Test func theStacksHeight() {
         #expect(PillStackMetrics.height(for: 0) == 0)
-        #expect(PillStackMetrics.height(for: 1) == PillStackMetrics.pillHeight + PillStackMetrics.gap)
-        #expect(PillStackMetrics.height(for: 3) == PillStackMetrics.height(for: 9)
-                - PillStackMetrics.moreHeight - PillStackMetrics.gap)
+        #expect(abs(PillStackMetrics.height(for: 1) - (PillStackMetrics.pillHeight + PillStackMetrics.gap)) < 0.001)
+        #expect(abs(PillStackMetrics.height(for: 2) - (PillStackMetrics.pillHeight + PillStackMetrics.compactHeight
+                + 2 * PillStackMetrics.gap)) < 0.001)
+        #expect(abs(PillStackMetrics.height(for: 3) - (PillStackMetrics.height(for: 9)
+                - PillStackMetrics.moreHeight - PillStackMetrics.gap)) < 0.001)
         #expect(PillCanvasView.toastBottomPadding(pillOnScreen: true, showsChip: false, stackHeight: 32)
                 == PillCanvasMetrics.toastLift + 32)
     }

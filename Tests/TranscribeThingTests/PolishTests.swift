@@ -654,7 +654,8 @@ import Testing
         #expect(TranscriptVersionKind.selection(.geminiFlash).displayName == "Selection polished by Gemini 3.8 Flash")
         #expect(TranscriptVersionKind.selection(.geminiArgon).engine == .geminiArgon)
         #expect(TranscriptVersionKind.selection(.gpt6Luna).engine == .geminiFlash)
-        #expect(PolishSelectionModel.allCases.allSatisfy { $0.choice == .gemini })
+        #expect(PolishSelectionModel.allCases.filter { $0 != .geminiNeon }.allSatisfy { $0.choice == .gemini })
+        #expect(PolishSelectionModel.geminiNeon.choice == .neon && PolishSelectionModel.geminiNeon.engine == .geminiNeon)
         #expect(PolishSelectionModel.geminiFlash.route != nil)
         #expect(PolishSelectionModel.geminiArgon.route == nil && PolishSelectionModel.gpt6Luna.route == nil,
                 "no longer asked")

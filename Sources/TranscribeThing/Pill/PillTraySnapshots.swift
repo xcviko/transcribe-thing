@@ -59,8 +59,9 @@ enum PillTraySnapshots {
             .init(id: "proc-held", caption: "Clicked away · Send dimmed") {
                 processing(choice: .gemini, held: true, hovering: .polish)
             },
-            .init(id: "proc-aimed", caption: "fn held over it: the tray comes out") {
-                processing(choice: .gemini, count: PillTokenCount(phase: .writing, tokens: 140), open: false, aimed: true)
+            .init(id: "proc-aimed", caption: "fn held over it: the tray comes out, the pill says what records") {
+                processing(choice: .gemini, count: PillTokenCount(phase: .writing, tokens: 140), open: false, aimed: true,
+                           secondPress: true)
             },
             .init(id: "proc-aimed-sent", caption: "fn ↩ · Send on") {
                 processing(choice: .gemini, sends: true, open: false, aimed: true)
@@ -128,13 +129,15 @@ enum PillTraySnapshots {
     @MainActor private static func processing(choice: ModelChoice, polishes: Bool = false, sends: Bool = false,
                                               rewrites: Bool = true, held: Bool = false, ready: Bool = false,
                                               count: PillTokenCount? = nil, hovering tooltip: PillToggle? = nil,
-                                              open: Bool = true, aimed: Bool = false) -> PillModel {
+                                              open: Bool = true, aimed: Bool = false,
+                                              secondPress: Bool = false) -> PillModel {
         let model = PillModel.preview(phase: .processing)
         model.sessionModel = choice
         model.polishes = polishes
         model.sends = sends && !held
         model.holdsPaste = held
         model.isReady = ready
+        model.secondPressKey = secondPress ? "fn" : nil
         let key = UUID()
         model.tray = PillTrayState(dictation: .processing(key), polishes: polishes, sends: sends && !held,
                                    rewrites: rewrites && choice.isGemini, canSend: !held,

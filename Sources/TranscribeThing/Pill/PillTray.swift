@@ -212,17 +212,25 @@ enum PillStackMetrics {
     static let gap: CGFloat = 6
     /// A stacked pill is always processing: the push-to-talk height.
     static let pillHeight: CGFloat = PillMetrics.listeningSize.height
+    /// A stacked pill is drawn this much smaller and this dim, so the bottom pill (the dictation being recorded, or the
+    /// newest, the one the keys go to) stands out. The one whose tray the pointer opened is full size, its tray too.
+    static let compactScale: CGFloat = 0.78
+    static let compactOpacity: Double = 0.6
+    /// A stacked pill's height while it's small.
+    static let compactHeight: CGFloat = pillHeight * compactScale
     /// How many stacked pills show; older ones fold into "+N" on top.
     static let shownLimit = 3
     static let moreHeight: CGFloat = 18
     /// From the nearest stacked pill down to the bottom pill: the bottom pill's tallest state and a gap.
     static let descent: CGFloat = PillMetrics.maxHeight + gap
 
-    /// How tall `count` stacked pills stand, their gaps and "+N" included.
+    /// How tall `count` stacked pills stand, their gaps and "+N" included, with room for one of them grown to full
+    /// size under the pointer.
     static func height(for count: Int) -> CGFloat {
         guard count > 0 else { return 0 }
         let shown = min(count, shownLimit)
-        return CGFloat(shown) * (pillHeight + gap) + (count > shownLimit ? moreHeight + gap : 0)
+        return CGFloat(shown) * (compactHeight + gap) + (pillHeight - compactHeight)
+            + (count > shownLimit ? moreHeight + gap : 0)
     }
 
     static func animation(reduceMotion: Bool) -> Animation {
@@ -232,7 +240,8 @@ enum PillStackMetrics {
 
 /// Dictations still on their way while a newer one is on the bottom pill (recording, or itself on its way): each on its
 /// own pill, the newest nearest, the oldest on top, so they read in the order their text will come. Each shows its own
-/// state as the bottom pill would (its count, its glyphs, its model's ring, its dashed edge) and has its own tray. A
+/// state as the bottom pill would (its count, its glyphs, its model's ring, its dashed edge) and has its own tray, all
+/// smaller and dimmer than the bottom pill until the pointer opens that tray (`PillStackMetrics.compactScale`). A
 /// dictation the bottom pill hands up rises out of it; one that's pasted fades where it stands and the pills above
 /// settle down into its place. Past `PillStackMetrics.shownLimit` the oldest fold into "+N" on top.
 struct PillStack: View {
@@ -295,31 +304,65 @@ private struct PillStackRowExit: ViewModifier {
     }
 }
 
-/// One stacked pill: its own pill model draws it (`PillModel.stackModels`), with its tray beside it. A click on a
-/// dashed one takes its click away back.
+/// One stacked pill: its own pill model draws it (`PillModel.stackModels`), with its tray beside it, both small and
+/// dim (`PillStackMetrics.compactScale`) until the pointer opens its tray. A click on a dashed one takes its click
+/// away back.
 private struct PillStackRow: View {
     let parent: PillModel
     let item: PillStackItem
     var regions: PillHitRegions?
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         if let child = parent.stackModels[item.key] {
             let owner = PillTrayOwner.stacked(item.key)
-            PillView(model: child)
-                .contentShape(Capsule(style: .continuous))
-                .onTapGesture { parent.onStackClick?(item.key) }
-                .overlay(alignment: .trailing) {
-                    PillTray(model: parent, owner: owner, state: item.tray, isOpen: parent.showsTray(owner),
-                             regions: regions)
-                        .alignmentGuide(.trailing) { $0[.leading] - PillTrayMetrics.gap }
-                }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
-                    // With its hover margin to the sides, and half the gap above and below.
-                    regions?.setStackPill(item.key, rect: rect.insetBy(dx: -PillMetrics.hoverMargin,
-                                                                      dy: -PillStackMetrics.gap / 2))
-                }
-                .onDisappear { regions?.setStackPill(item.key, rect: nil) }
+            let compact = parent.isCompact(item.key)
+            let scale = compact ? PillStackMetrics.compactScale : 1
+            PillCompactLayout(scale: scale) {
+                PillView(model: child)
+                    .contentShape(Capsule(style: .continuous))
+                    .onTapGesture { parent.onStackClick?(item.key) }
+                    .overlay(alignment: .trailing) {
+                        PillTray(model: parent, owner: owner, state: item.tray, isOpen: parent.showsTray(owner),
+                                 regions: regions)
+                            .alignmentGuide(.trailing) { $0[.leading] - PillTrayMetrics.gap }
+                    }
+                    .scaleEffect(scale)
+            }
+            .compositingGroup()
+            .opacity(compact ? PillStackMetrics.compactOpacity : 1)
+            .animation(PillStackMetrics.animation(reduceMotion: reduceMotion), value: compact)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
+                // With its hover margin to the sides, and half the gap above and below.
+                regions?.setStackPill(item.key, rect: rect.insetBy(dx: -PillMetrics.hoverMargin,
+                                                                  dy: -PillStackMetrics.gap / 2))
+            }
+            .onDisappear { regions?.setStackPill(item.key, rect: nil) }
         }
+    }
+}
+
+/// Lays its one view out at its own size and takes `scale` of it in the stack: the view, drawn at that scale
+/// (`scaleEffect`), fills it exactly. Animates with the scale, so the pills around move as it grows or shrinks.
+private struct PillCompactLayout: Layout {
+    var scale: CGFloat
+
+    var animatableData: CGFloat {
+        get { scale }
+        set { scale = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let view = subviews.first else { return .zero }
+        let size = view.sizeThatFits(.unspecified)
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let view = subviews.first else { return }
+        view.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center,
+                   proposal: ProposedViewSize(view.sizeThatFits(.unspecified)))
     }
 }
 
@@ -341,6 +384,8 @@ private struct PillStackMore: View {
                     .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
             }
             .fixedSize()
+            .compositingGroup()
+            .opacity(PillStackMetrics.compactOpacity)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(count) more \(count == 1 ? "dictation" : "dictations") on the way")
     }

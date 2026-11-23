@@ -3,8 +3,8 @@ import Foundation
 /// The transcription engines transcribe-thing knows. Raw values are persisted (settings, history), never rename
 /// them. Declaration order is display order: the models on this Mac, then Gemini.
 enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// `parakeet`, `parakeetCloud`, `geminiArgon` and `geminiPro` are retired (`isRetired`): History still holds what
-    /// they wrote.
+    /// `parakeet`, `parakeetCloud`, `geminiHydrogen`, `geminiCarbon`, `geminiArgon` and `geminiPro` are retired
+    /// (`isRetired`): History still holds what they wrote.
     /// `geminiCarbon` is Gemini 4 Carbon, offered after Argon was retired: a model of its own, never Argon's case.
     /// `geminiHydrogen` is Gemini 4 Hydrogen, Google's newer Flash-class model, offered after Carbon: listed between
     /// Flash and Carbon. `geminiNeon` is Gemini 4 Neon, the middle of the Gemini 4 family, offered after Hydrogen:
@@ -18,11 +18,15 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     static let `default`: EngineID = .gigaam
 
     /// A model this build no longer offers or runs: Parakeet v3 (on this Mac, and through OpenRouter's speech-to-text
-    /// endpoint), Gemini 4 Argon and Gemini 3.1 Pro. Their cases stay so History keeps reading, naming and drawing the
-    /// transcripts they wrote; a setting that named one reads as the model that took its place (`replacement`):
-    /// GigaAM v3 for either Parakeet, Gemini 3.8 Flash for the others (`AppSettings`).
+    /// endpoint), Gemini 4 Hydrogen, Gemini 4 Carbon, Gemini 4 Argon and Gemini 3.1 Pro. Their cases stay so History
+    /// keeps reading, naming and drawing the transcripts they wrote; a setting that named one reads as the model that
+    /// took its place (`replacement`): GigaAM v3 for either Parakeet, Gemini 4 Neon for Hydrogen and Carbon, Gemini 3.8
+    /// Flash for Argon and 3.1 Pro (`AppSettings`).
     var isRetired: Bool {
-        self == .parakeet || self == .parakeetCloud || self == .geminiArgon || self == .geminiPro
+        switch self {
+        case .gigaam, .geminiFlash, .geminiNeon: false
+        case .parakeet, .parakeetCloud, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: true
+        }
     }
 
     /// Every engine this build offers and runs, in display order. Every list of models to pick, switch to, fall
@@ -33,8 +37,8 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// The models that run on this Mac: GigaAM v3.
     static var localEngines: [EngineID] { offered.filter(\.isLocal) }
-    /// The Gemini models this build runs: Gemini 3.8 Flash, Gemini 4 Hydrogen, Gemini 4 Neon and Gemini 4 Carbon. Each
-    /// takes calls too (`AppSettings.callModel`).
+    /// The Gemini models this build runs: Gemini 3.8 Flash and Gemini 4 Neon. Each takes calls too
+    /// (`AppSettings.callModel`).
     static var geminiEngines: [EngineID] { offered.filter(\.isGemini) }
 
     var isLocal: Bool {
@@ -109,8 +113,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeetCloud: "25 European languages · ≈ $0.09 per hour of audio"
         case .geminiFlash: "Fast and very accurate · pay per use"
         case .geminiHydrogen: "Newer than Flash · faster on long dictations · about 2× Flash’s price per token"
-        case .geminiNeon: "Newest · between Hydrogen and Carbon · about 3.6× Flash’s price per token"
-        // The top of the Gemini 4 family: Neon, the middle, came after it.
+        case .geminiNeon: "Newer than Flash · about 3.6× Flash’s price per token"
         case .geminiCarbon: "Top of Gemini 4 · slower · about 2.7× Flash’s cost"
         case .geminiArgon, .geminiPro: "Most accurate · slower · higher cost"
         }

@@ -51,18 +51,22 @@ enum Polish {
 
 /// The models that polish or translate a selection: Gemini 3.8 Flash. GPT-6 Luna was asked alongside Flash once to
 /// see which answer gets picked; Gemini's was, so Luna is no longer asked. Gemini 4 Argon was asked for whoever
-/// dictated with it, until it was removed. Both stay only so History reads the versions they wrote. Raw values are
-/// persisted (History, and the cards' dedupe keys): never rename them.
+/// dictated with it, until it was removed, and Gemini 4 Neon for a few hours while Flash was gone. Luna, Argon and Neon
+/// stay only so History reads the versions they wrote. Raw values are persisted (History, and the cards' dedupe keys):
+/// never rename them.
 enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     case geminiFlash
     /// No longer asked: History's old versions only.
     case gpt6Luna
     /// No longer asked (`EngineID.geminiArgon` is retired): History's old versions only.
     case geminiArgon
+    /// No longer asked: History's versions from the build without Flash only.
+    case geminiNeon
 
-    /// "Gemini 3.8 Flash", "GPT-6 Luna", and History's old "Gemini 4 Argon".
+    /// "Gemini 3.8 Flash", and History's old "GPT-6 Luna", "Gemini 4 Argon" and "Gemini 4 Neon".
     var modelName: String {
         switch self {
+        case .geminiNeon: EngineID.geminiNeon.modelName
         case .geminiFlash: EngineID.geminiFlash.modelName
         case .geminiArgon: EngineID.geminiArgon.modelName
         case .gpt6Luna: CleanupModel.gpt6Luna.modelName
@@ -70,9 +74,10 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     }
 
     /// The engine the request goes to (Flash, at the Reasoning level picked for it in Models), or the one that wrote
-    /// an old answer (Argon's, which History names and marks by it); nil for Luna.
+    /// an old answer (Argon's or Neon's, which History names and marks by it); nil for Luna.
     var engine: EngineID? {
         switch self {
+        case .geminiNeon: .geminiNeon
         case .geminiFlash: .geminiFlash
         case .geminiArgon: .geminiArgon
         case .gpt6Luna: nil
@@ -93,6 +98,6 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     }
 
     /// The model whose color the pill and History wear: Gemini's, for Flash's answers and the old ones by Luna and
-    /// Argon alike.
-    var choice: ModelChoice { .gemini }
+    /// Argon alike; Neon's for Neon's.
+    var choice: ModelChoice { self == .geminiNeon ? .neon : .gemini }
 }

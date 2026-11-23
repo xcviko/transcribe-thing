@@ -166,7 +166,6 @@ struct TextRoute: Equatable, Sendable {
         case .low: 2_048
         case .medium: 8_192
         case .high: 16_384
-        case .xhigh: 32_768
         }
         return min(128_000, max(4_096, max(0, count) + headroom))
     }

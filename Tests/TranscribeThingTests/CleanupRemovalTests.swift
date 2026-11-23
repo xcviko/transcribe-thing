@@ -38,17 +38,17 @@ import Testing
     @Test func aCleanupMainModelBecomesGigaAM() throws {
         let decoded = try lineup(#"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#)
         #expect(decoded.main == .gigaam)
-        #expect(decoded.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+        #expect(decoded.order == [.gigaam, .gemini, .neon])
         #expect(decoded.cycle == [.gigaam, .gemini])
         let reordered = try lineup(#"{"main":"cleanup","order":["gemini","cleanup","parakeet"],"switchable":["gemini"]}"#)
-        #expect(reordered.main == .gigaam && reordered.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+        #expect(reordered.main == .gigaam && reordered.order == [.gemini, .gigaam, .neon])
         #expect(reordered.cycle == [.gigaam, .gemini])
     }
 
     /// Switch model reached clean-up: it reaches GigaAM now, even where Parakeet itself was switched off.
     @Test func aSwitchableCleanupSwitchesGigaAMOn() throws {
         let decoded = try lineup(#"{"main":"gemini","order":["gemini","cleanup","parakeet"],"switchable":["cleanup"]}"#)
-        #expect(decoded.main == .gemini && decoded.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+        #expect(decoded.main == .gemini && decoded.order == [.gemini, .gigaam, .neon])
         #expect(decoded.cycle == [.gemini, .gigaam])
         let off = try lineup(#"{"main":"gemini","order":["parakeet","cleanup","gemini"],"switchable":[]}"#)
         #expect(off.cycle == [.gemini], "clean-up wasn't a step: GigaAM stays off")
@@ -62,7 +62,7 @@ import Testing
             let settings = load(defaults)
             #expect(settings.lineup.main == .gigaam && settings.lineup.cycle == [.gigaam, .gemini])
             #expect(settings.mainEngine == .gigaam)
-            #expect(stored(defaults, .lineup) == #"{"main":"gigaam","order":["gigaam","gemini","hydrogen","neon","carbon"],"switchable":["gigaam","gemini"]}"#)
+            #expect(stored(defaults, .lineup) == #"{"main":"gigaam","order":["gigaam","gemini","neon"],"switchable":["gigaam","gemini"]}"#)
             #expect(load(defaults).lineup == settings.lineup, "a reload changes nothing")
         }
     }
@@ -99,15 +99,15 @@ import Testing
     }
 
     /// General → Pasting's rules for clean-up have no model to hold for: they go, the others stay (and Gemini 4
-    /// Carbon, Hydrogen and Neon, which came later, start with Flash's).
+    /// Neon, which came later, starts with Flash's).
     @Test func cleanupDropsOutOfThePastingRules() throws {
         try withDefaults { defaults in
             defaults.set(try JSONEncoder().encode(["cleanup", "gemini"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
             defaults.set(try JSONEncoder().encode(["cleanup"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.modelsAddingSpace == [.gemini, .neon])
             #expect(settings.modelsRemovingFinalPeriod.isEmpty)
-            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","hydrogen","neon","carbon"]"#)
+            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","neon"]"#)
             #expect(stored(defaults, .modelsRemovingFinalPeriod) == "[]")
         }
     }
@@ -123,7 +123,7 @@ import Testing
             let settings = load(defaults)
             #expect(settings.lineup.main == .gigaam)
             #expect(settings.modelsAddingSpace == [.gigaam]
-                    && settings.modelsRemovingFinalPeriod == [.gemini, .hydrogen, .neon, .carbon])
+                    && settings.modelsRemovingFinalPeriod == [.gemini, .neon])
             #expect(stored(defaults, .modelsAddingSpace) == #"["gigaam"]"#)
             #expect(load(defaults).modelsAddingSpace == [.gigaam], "it stays once the lineup is stored without it")
         }
@@ -132,7 +132,7 @@ import Testing
             let json = #"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#
             defaults.set(Data(json.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set(try JSONEncoder().encode(["parakeet", "gemini"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
-            #expect(load(defaults).modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon])
+            #expect(load(defaults).modelsAddingSpace == [.gemini, .neon])
         }
     }
 
@@ -144,12 +144,12 @@ import Testing
             let settings = load(defaults)
             #expect(settings.modelColors.parakeet == .teal && settings.modelColors[.gemini] == .blue)
             #expect(stored(defaults, .modelColors)
-                    == #"{"carbon":"blue","gemini":"blue","gigaam":"green","hydrogen":"pink","neon":"orange","parakeet":"teal"}"#)
+                    == #"{"gemini":"blue","gigaam":"green","neon":"orange","parakeet":"teal"}"#)
         }
     }
 
     @Test func onlyGigaAMAndTheGeminisAreLeft() {
-        #expect(ModelChoice.allCases == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+        #expect(ModelChoice.allCases == [.gigaam, .gemini, .neon])
         #expect(ModelChoice(rawValue: ModelChoice.retiredCleanup) == nil)
         #expect(ModelChoice.read(["parakeet", "cleanup", "gemini"]) == [.gemini])
     }
@@ -218,8 +218,8 @@ private let historyFile = #"""
         let m = menu(try entries()[0])
         #expect(m.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by GPT-6 Luna"])
         #expect(m.versions.map(\.isCurrent) == [false, true])
-        #expect(m.actions.map(\.kind) == [.gigaam(.v3), .transcription(.geminiFlash), .transcription(.geminiHydrogen),
-                                          .transcription(.geminiNeon), .transcription(.geminiCarbon)]
+        #expect(m.actions.map(\.kind) == [.gigaam(.v3), .transcription(.geminiFlash),
+                                          .transcription(.geminiNeon)]
                 + TranscriptVersionKind.rewrites)
         #expect(!m.actions.contains { $0.kind.isCleanup || $0.title.contains("Clean Up") })
     }

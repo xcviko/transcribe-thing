@@ -62,11 +62,11 @@ enum OnboardingSnapshots {
                 ctx.models = .preview(states: [.gigaam: .ready])
                 ctx.settings.shortcuts[.switchModel] = .rightCommand
             }) { model in model.stage(step: .model) },
-            // Gemini 4 Carbon switched on after GigaAM: the line under the card names it.
-            entry("onboarding-3-model-carbon-step", context: { ctx in
+            // Gemini 4 Neon switched on after GigaAM: the line under the card names it.
+            entry("onboarding-3-model-neon-step", context: { ctx in
                 ctx.models = .preview(states: [.gigaam: .ready])
-                ctx.settings.lineup.move(.carbon, to: 1)
-                ctx.settings.lineup.setSwitchable(.carbon, true)
+                ctx.settings.lineup.move(.neon, to: 1)
+                ctx.settings.lineup.setSwitchable(.neon, true)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-gemini-main-missing", context: { ctx in
                 ctx.models = .preview(states: [.gigaam: .notInstalled])
@@ -179,8 +179,8 @@ enum OnboardingSnapshots {
             entry("onboarding-6-done-gemini", still: 0.42, context: { ctx in
                 ctx.settings.lineup.main = .gemini
             }) { model in model.stage(step: .done) },
-            entry("onboarding-5-done-carbon", still: 0.42, context: { ctx in
-                ctx.settings.lineup.main = .carbon
+            entry("onboarding-5-done-neon", still: 0.42, context: { ctx in
+                ctx.settings.lineup.main = .neon
             }) { model in model.stage(step: .done) },
         ]
     }

@@ -437,12 +437,7 @@ enum CallsCopy {
 
     /// What General → Calls says about the call model's Reasoning.
     static func reasoningSubtitle(_ model: CallModel) -> String {
-        if model.effort == .xhigh {
-            // Measured in November 2026: 4 to 9 minutes a call, and a 25-minute call thought itself out of room.
-            return "\(model.engine.modelName) thinks for minutes at xHigh, even on a short call, and on a long one it "
-                + "can spend all its room thinking and write no transcript. Medium is about as fast as Gemini 3.8 Flash."
-        }
-        return "How long \(model.engine.modelName) thinks before it writes a transcript and summary, apart from its "
+        "How long \(model.engine.modelName) thinks before it writes a transcript and summary, apart from its "
             + "level for dictation. Higher is slower and costs more."
     }
 

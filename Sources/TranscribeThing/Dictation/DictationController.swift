@@ -159,6 +159,9 @@ final class DictationController {
     /// The talk key's press now down is an aimed one: its release (or interruption) ends the aim, never a recording.
     @ObservationIgnored private var pressIsAimed = false
     @ObservationIgnored private var aimTask: Task<Void, Never>?
+    /// Brings up the pill's "fn again to dictate" (`PillModel.secondPressKey`), with the light start sound, once an
+    /// aimed press is held `secondPressHintDelay` without a key.
+    @ObservationIgnored private var aimHintTask: Task<Void, Never>?
     /// A dictation on its way whose Polish or Translate a key flipped: it's sent again with what was picked last once
     /// the key is up (`.toggleKeyUp`), one request however many times a held key flipped it.
     @ObservationIgnored private weak var keyFlippedJob: Job?
@@ -169,6 +172,10 @@ final class DictationController {
     @ObservationIgnored private var journalLabel: (engine: EngineID, mode: DictationMachine.Mode)?
     /// How soon after letting go of an aimed talk key a second press records a new dictation.
     @ObservationIgnored var secondPressWindow: TimeInterval = 0.5
+    /// How long an aimed press is held without a key before the pill says "fn again to dictate", with the light start
+    /// sound (`.startLight`): fn ↩, fn P and fn T pressed quickly never bring them. Let go without a key, they come at
+    /// once.
+    @ObservationIgnored var secondPressHintDelay: Duration = .milliseconds(250)
     /// When a key's flips of a dictation on its way are settled even if the key's release never came.
     @ObservationIgnored var keyFlipSettle: Duration = .seconds(2)
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
@@ -565,8 +572,17 @@ final class DictationController {
 
     private func aim() {
         aimTask?.cancel()
+        aimHintTask?.cancel()
         talkKeyAim = TalkKeyAim()
         pressIsAimed = true
+        let delay = secondPressHintDelay
+        aimHintTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, let aim = self.talkKeyAim, !aim.usedKey else { return }
+            self.talkKeyAim?.hintDue = true
+            self.playCue(.startLight)
+            self.stateDidChange()
+        }
         DiagnosticLog.shared.event(.dictation, "talkKey.aimed")
         stateDidChange()
     }
@@ -580,6 +596,9 @@ final class DictationController {
         if interrupted || aim.usedKey {
             endAim()
         } else {
+            aimHintTask?.cancel()
+            // Let go before the hint came: it comes now, with its sound.
+            if !aim.hintDue { playCue(.startLight) }
             aim.releasedAt = clock()
             talkKeyAim = aim
             let window = secondPressWindow
@@ -604,6 +623,8 @@ final class DictationController {
     private func endAim() {
         aimTask?.cancel()
         aimTask = nil
+        aimHintTask?.cancel()
+        aimHintTask = nil
         talkKeyAim = nil
     }
 
@@ -3707,6 +3728,16 @@ final class DictationController {
             nil
         }
         if pillModel.tray != tray { pillModel.tray = tray }
+        // An aimed press records nothing: held a moment without a key, or let go without one, the pill says what
+        // records, until a key of the press goes to the dictation or the second press's window has passed.
+        let secondPressKey: String? = if let aim = talkKeyAim, aim.showsHint, phase == .processing,
+                                         let job = pillJob, queue.last === job,
+                                         let talkKey = settings.shortcuts[.pushToTalk] {
+            ShortcutFormatter.compact(talkKey)
+        } else {
+            nil
+        }
+        if pillModel.secondPressKey != secondPressKey { pillModel.secondPressKey = secondPressKey }
         // Every other dictation on its way stands above it, on a pill of its own, the newest nearest.
         let bottom = phase.isRecording ? nil : pillJob
         let stacked = onTheirWay.filter { $0 !== bottom }.reversed()
@@ -3843,4 +3874,10 @@ private struct TalkKeyAim {
     var usedKey = false
     /// When the press was let go without one: a second press records until `secondPressWindow` after it.
     var releasedAt: TimeInterval?
+    /// The press has been held `secondPressHintDelay` without a key.
+    var hintDue = false
+
+    /// The pill says "fn again to dictate": no key of the press went to the dictation, and it was held a moment or let
+    /// go.
+    var showsHint: Bool { !usedKey && (hintDue || releasedAt != nil) }
 }

@@ -22,19 +22,17 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
 @Suite struct ReasoningEffortTests {
     @Test func eachGeminiOffersLowMediumAndHighAndStartsAtItsOwnDefault() {
-        for engine in EngineID.geminiEngines where engine != .geminiNeon {
-            #expect(engine.reasoningEfforts == [.low, .medium, .high], "no Minimal, no None")
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiNeon])
+        for engine in EngineID.geminiEngines {
+            #expect(engine.reasoningEfforts == [.low, .medium, .high], "no Minimal, no None, no xHigh")
         }
-        #expect(EngineID.geminiNeon.reasoningEfforts == [.low, .medium, .high, .xhigh], "Neon's xHigh on top")
         #expect(EngineID.geminiFlash.defaultReasoningEffort == .medium)
-        #expect(EngineID.geminiHydrogen.defaultReasoningEffort == .medium)
         #expect(EngineID.geminiNeon.defaultReasoningEffort == .low)
-        #expect(EngineID.geminiCarbon.defaultReasoningEffort == .low)
-        for engine in [EngineID.parakeet, .parakeetCloud, .geminiArgon, .geminiPro] {
+        for engine in [EngineID.parakeet, .parakeetCloud, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro] {
             #expect(engine.reasoningEfforts.isEmpty && engine.defaultReasoningEffort == nil, "\(engine)")
         }
-        #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high", "xhigh"])
-        #expect(ReasoningEffort.xhigh.title == "xHigh")
+        #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high"])
+        #expect(ReasoningEffort(rawValue: "xhigh") == nil, "xHigh is gone")
         #expect(ReasoningEffort.off.title == "None" && ReasoningEffort.medium.title == "Medium")
     }
 }
@@ -220,7 +218,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(CallModel.default == CallModel(engine: .geminiNeon, effort: .medium))
         #expect(AppSettings.inMemory().callModel == .default)
         #expect(CallModel.default.modelID == "google/gemini-4-neon")
-        #expect(EngineID.callModels == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+        #expect(EngineID.callModels == [.geminiFlash, .geminiNeon])
     }
 
     /// Each model keeps its own level for calls, Medium until picked, apart from its level for dictation; both, and
@@ -230,17 +228,20 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let settings = AppSettings(defaults: defaults)
         #expect(settings.callModel == CallModel(engine: .geminiNeon, effort: .medium))
         #expect(settings.reasoningEffort(for: .geminiNeon) == .low, "dictation's Neon starts at Low")
-        settings.callReasoningEfforts[.geminiNeon] = .xhigh
-        settings.callEngine = .geminiHydrogen
-        #expect(settings.callModel == CallModel(engine: .geminiHydrogen, effort: .medium))
-        settings.callReasoningEfforts[.geminiHydrogen] = .xhigh
-        #expect(settings.callModel.effort == .medium, "Hydrogen has no xHigh")
+        settings.callReasoningEfforts[.geminiNeon] = .high
+        settings.callEngine = .geminiFlash
+        #expect(settings.callModel == CallModel(engine: .geminiFlash, effort: .medium))
+        settings.callReasoningEfforts[.geminiFlash] = .low
+        #expect(settings.callModel.effort == .low)
         settings.callEngine = .geminiNeon
-        #expect(settings.callModel.effort == .xhigh && settings.reasoningEffort(for: .geminiNeon) == .low)
+        #expect(settings.callModel.effort == .high && settings.reasoningEffort(for: .geminiNeon) == .low)
 
         let reloaded = AppSettings(defaults: defaults)
-        #expect(reloaded.callModel == CallModel(engine: .geminiNeon, effort: .xhigh))
-        #expect(reloaded.callReasoningEfforts[.geminiFlash] == .medium && reloaded.reasoningEffort(for: .geminiNeon) == .low)
+        #expect(reloaded.callModel == CallModel(engine: .geminiNeon, effort: .high))
+        #expect(reloaded.callReasoningEfforts[.geminiFlash] == .low && reloaded.reasoningEffort(for: .geminiNeon) == .low)
+
+        defaults.set("geminiCarbon", forKey: SettingsKey.callModel.defaultsKey)
+        #expect(AppSettings(defaults: defaults).callModel.engine == .geminiNeon, "the removed Carbon: Neon")
 
         defaults.set("geminiArgon", forKey: SettingsKey.callModel.defaultsKey)
         #expect(AppSettings(defaults: defaults).callModel.engine == .geminiNeon)

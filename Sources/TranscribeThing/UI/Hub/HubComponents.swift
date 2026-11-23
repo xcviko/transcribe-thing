@@ -494,8 +494,8 @@ struct EngineGlyph: View {
     /// The models' colors (`AppSettings.modelColors`).
     var colors: ModelColors = .default
 
-    /// The color of the model that made it, Carbon's for Gemini 4 Carbon: the retired Gemini 3.1 Pro and Gemini 4
-    /// Argon wear Flash's; the retired Parakeet, on this Mac or in the cloud, and an old clean-up of its text wear
+    /// The color of the model that made it: the retired Gemini 3.1 Pro and Gemini 4 Argon wear Flash's, the retired
+    /// Gemini 4 Hydrogen and Carbon Neon's; the retired Parakeet, on this Mac or in the cloud, and an old clean-up of its text wear
     /// Parakeet's own, as before it was retired (`ModelColors.color(of:)`).
     var color: ModelColor {
         colors.color(of: engine)

@@ -169,7 +169,7 @@ private final class SentCount: @unchecked Sendable {
         #expect(settings.callExclusions == [f.exclusion])
         #expect(!settings.showsCallNotices)
         #expect(settings.callModel == CallModel(engine: .geminiFlash, effort: .high))
-        #expect(settings.callReasoningEfforts[.geminiNeon] == .xhigh)
+        #expect(settings.callReasoningEfforts[.geminiNeon] == .medium, "xHigh isn't offered: Neon's Medium for calls")
         #expect(settings.reasoningEffort(for: .geminiFlash) == .medium && settings.reasoningEffort(for: .geminiNeon) == .low)
         #expect(settings.userName.isEmpty && settings.vertexProxyURL != "https://endpoint.example/api/v1")
     }

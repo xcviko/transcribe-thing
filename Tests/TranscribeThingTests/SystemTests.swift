@@ -2810,6 +2810,75 @@ private struct ClockedKeyboard {
         #expect(rig.h.pill.tray?.isAimed != true)
     }
 
+    /// fn held a moment over a dictation on its way: the pill says "fn again to dictate" in place of its wave, with the
+    /// light start sound once, and still says it once fn is up, until the second press records.
+    @Test func anAimedPressHeldAMomentSaysHowToRecord() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        c.secondPressHintDelay = .milliseconds(30)
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        cues.played.removeAll()
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(rig.h.pill.secondPressKey == nil, "not at once: the press may be for fn ↩, fn P or fn T")
+        #expect(!cues.played.contains(.startLight) && !cues.played.contains(.start))
+        try await waitUntil { rig.h.pill.secondPressKey == "fn" }
+        #expect(PillView(model: rig.h.pill).visual == .secondPress(key: "fn"))
+        #expect(cues.played.filter { $0 == .startLight }.count == 1)
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(rig.h.pill.secondPressKey == "fn", "it waits for the second press")
+        #expect(cues.played.filter { $0 == .startLight }.count == 1, "once a press")
+        rig.now += 0.2
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(c.machine.isRecording && rig.h.pill.secondPressKey == nil)
+        #expect(cues.played.last == .start)
+        c.handle(.cancel)
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 }
+    }
+
+    /// A key of the press (fn ↩) went to the dictation: the pill never says it, nor sounds the light start. A tap of fn
+    /// brings both at once, and the hint goes with the second press's window.
+    @Test func aKeyOfThePressKeepsTheHintAwayAndATapShowsItAtOnce() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        c.secondPressHintDelay = .milliseconds(30)
+        c.secondPressWindow = 0.05
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.down(kVK_Return, fnFlagged: true).events.forEach(c.handle)
+        kb.up(kVK_Return, fnFlagged: true).events.forEach(c.handle)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(rig.h.pill.tray?.sends == true && rig.h.pill.secondPressKey == nil)
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(rig.h.pill.secondPressKey == nil && !cues.played.contains(.startLight), "fn ↩ has its own sound")
+        rig.now += 1
+        c.secondPressHintDelay = .seconds(10)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(rig.h.pill.secondPressKey == "fn", "let go without a key: at once")
+        #expect(cues.played.filter { $0 == .startLight }.count == 1)
+        try await waitUntil { rig.h.pill.secondPressKey == nil && rig.h.pill.tray?.isAimed != true }
+        #expect(!c.machine.isRecording)
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 }
+    }
+
     /// fn Space off an aimed press goes hands-free at once.
     @Test func fnSpaceOverADictationOnItsWayGoesHandsFree() async throws {
         let first = RequestGate()

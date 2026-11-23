@@ -21,6 +21,8 @@ current: low, woody and percussive (knocks, a mouth pop, soft marimba notes).
 
 A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1-2 kHz ceiling, almost no ring.
   start    pop 250 -> 175 Hz, tau 11 ms, 70 ms          stop     pop 200 -> 135 Hz, tau 13 ms, 85 ms
+  startLight  a light start: start's pop a fifth higher, 375 -> 262 Hz, tau 6 ms, 50 ms, -20 dBFS: the talk key
+           went down over a dictation on its way and nothing records ("fn again to dictate" on the pill)
   lock     pops 225 -> 160 and 260 -> 185 Hz, 55 ms apart, 125 ms
   paste    tiny pop 280 -> 150 Hz, tau 5 ms, 45 ms      cancel   pop sliding 230 -> 120 Hz over ~45 ms, 95 ms
   alert    two pitched pops G3 -> B3, 110 ms apart      error    two low pops 140 -> 124 Hz, 105 ms apart
@@ -458,6 +460,13 @@ def a_start():
     return finish(c.buf, -11, lowpass_hz=1800, fade_out_ms=12)
 
 
+def a_start_light():
+    c = Canvas(0.050)
+    c.add(0.0, tongue(375.0, 262.0, glide_s=0.010, tau=0.006, seconds=0.050, h2_db=-14.0, cavity=(2.4, -8.0, 0.002),
+                      click_db=-20.0, seed=141))
+    return finish(c.buf, -20, lowpass_hz=1800, fade_out_ms=10)
+
+
 def a_stop():
     c = Canvas(0.085)
     c.add(0.0, tongue(200.0, 135.0, glide_s=0.018, tau=0.013, seconds=0.085, h2_db=-12.0, cavity=(2.3, -12.0, 0.003),
@@ -743,7 +752,7 @@ SETS = {
     "current": {"start": make_start, "stop": make_stop, "lock": make_lock, "paste": make_paste,
                 "cancel": make_cancel, "alert": make_alert, "error": make_error, "success": make_success,
                 "modelSwitch": make_model_switch},
-    "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
+    "A": {"start": a_start, "startLight": a_start_light, "stop": a_stop, "lock": a_lock, "paste": a_paste,
           "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success,
           "modelSwitch": a_model_switch, "polishOn": a_polish_on, "polishOff": a_polish_off,
           "polishReady": a_polish_ready, "dictionaryAdded": a_dictionary_added, "sendOn": a_send_on,

@@ -143,6 +143,18 @@ enum PillMetrics {
         width: (2 * counterPadding + counterWandSize + 2 + counterWandGap
                 + textWidth(readyText, size: captionFontSize, weight: .medium, rounded: true)).rounded(.up),
         height: listeningSize.height)
+    /// After the talk key's cap, on a dictation on its way the key went down over (`PillVisual.secondPress`).
+    static let secondPressText = "again to dictate"
+    /// The talk key's cap there: its label in the caption font, a little smaller, on a lighter capsule.
+    static let keyCapFontSize: CGFloat = captionFontSize - 1
+    static let keyCapPadding: CGFloat = 5
+    static let keyCapGap: CGFloat = 5
+    /// The key's cap, its gap and the words, with the counter's padding.
+    static func secondPressSize(key: String) -> CGSize {
+        let cap = textWidth(key, size: keyCapFontSize, weight: .semibold, rounded: true) + 2 * keyCapPadding
+        let words = textWidth(secondPressText, size: captionFontSize, weight: .medium, rounded: true)
+        return CGSize(width: (2 * counterPadding + cap + keyCapGap + words).rounded(.up), height: listeningSize.height)
+    }
     /// What a selection's polish says until the model's count comes.
     static let polishingText = "Polishing"
     /// A selection's polish before its count: the wand and "Polishing", with the counter's padding and nothing more.
@@ -292,15 +304,18 @@ enum PillVisual: Equatable, Sendable {
     /// A dictation on its way whose text is there, waiting for an older one's to be pasted first (`PillModel.isReady`):
     /// a check and "ready" in place of the wave or the count, the capsule just around them.
     case ready
+    /// The talk key went down over a dictation on its way and records nothing (`PillModel.secondPressKey`): the key's cap
+    /// and "again to dictate" in place of the wave, the count or "ready", the capsule just around them.
+    case secondPress(key: String)
     case error
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
 
     enum Content: Hashable {
-        case empty, peek, hello, recording, processing, ready, error, message
+        case empty, peek, hello, recording, processing, ready, secondPress, error, message
 
         /// Everything but `.empty`, which draws nothing: one layer each on the pill's stage (`PillFace`).
-        static let drawn: [Content] = [.peek, .hello, .recording, .processing, .ready, .error, .message]
+        static let drawn: [Content] = [.peek, .hello, .recording, .processing, .ready, .secondPress, .error, .message]
     }
 
     var size: CGSize {
@@ -323,6 +338,7 @@ enum PillVisual: Equatable, Sendable {
                                                       + (sends ? PillMetrics.sendRoom : 0))
         case .hello: PillMetrics.listeningSize
         case .ready: PillMetrics.readySize
+        case .secondPress(let key): PillMetrics.secondPressSize(key: key)
         case .locked(let hours, let polishes, let sends):
             CGSize(width: (hours ? PillMetrics.lockedHoursSize : PillMetrics.lockedSize).width
                        + (polishes ? PillMetrics.polishWandRoom : 0) + (sends ? PillMetrics.sendRoom : 0),
@@ -344,6 +360,7 @@ enum PillVisual: Equatable, Sendable {
         case .listening, .locked: .recording
         case .processing: .processing
         case .ready: .ready
+        case .secondPress: .secondPress
         case .error: .error
         case .message: .message
         }
@@ -352,11 +369,13 @@ enum PillVisual: Equatable, Sendable {
     /// Recording and processing show a dictation (ready too), so they carry its model (chip and tint), and so does the
     /// sentence about how it ended ("No speech detected"); nothing else does.
     var carriesModel: Bool {
-        content == .recording || content == .processing || content == .ready || content == .message
+        content == .recording || content == .processing || content == .ready || content == .secondPress
+            || content == .message
     }
 
-    /// A dictation on its way, processed or ready: the dashed edge of a click away is its.
-    var isOnItsWay: Bool { content == .processing || content == .ready }
+    /// A dictation on its way, processed or ready (or saying how to record another): the dashed edge of a click away
+    /// is its.
+    var isOnItsWay: Bool { content == .processing || content == .ready || content == .secondPress }
 
     /// Resting shapes cast half the shadow.
     var isQuiet: Bool {
@@ -491,6 +510,7 @@ struct PillView: View {
         case .locked:
             return .locked(hours: model.showsHours)
         case .processing:
+            if let key = model.secondPressKey, !model.selectionPolishing { return .secondPress(key: key) }
             if model.isReady, !model.selectionPolishing { return .ready }
             let selection: PillPolish = model.translates ? .translatedSelection : .selection
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
@@ -569,7 +589,7 @@ struct PillView: View {
         case .hello: return .spring(duration: 0.42, bounce: 0.3)
         case .listening: return .spring(duration: 0.32, bounce: 0.26)
         case .locked: return .spring(duration: 0.34, bounce: 0.3)
-        case .processing, .ready: return .spring(duration: 0.3, bounce: 0.12)
+        case .processing, .ready, .secondPress: return .spring(duration: 0.3, bounce: 0.12)
         case .error: return .spring(duration: 0.3, bounce: 0.2)
         case .message: return .spring(duration: 0.3, bounce: 0.12)
         }
@@ -586,6 +606,7 @@ struct PillView: View {
             "transcribe-thing is \(model.translates ? "translating" : "polishing")"
         case .processing: "transcribe-thing is transcribing"
         case .ready: "transcribe-thing has the text, waiting for the dictation before it"
+        case .secondPress(let key): "Press \(key) again to dictate"
         case .error: "Dictation failed"
         case .message(let text): text
         }
@@ -1025,6 +1046,11 @@ struct PillFace: View {
         case .ready:
             PillReadyLabel()
                 .modifier(fit)
+        case .secondPress:
+            if case .secondPress(let key) = visual {
+                PillSecondPressLabel(key: key)
+                    .modifier(fit)
+            }
         case .error:
             ErrorGlyph()
                 .modifier(fit)
@@ -1356,6 +1382,36 @@ private struct PillReadyLabel: View {
                 .foregroundStyle(.white)
                 .frame(width: PillMetrics.counterWandSize + 2)
             Text(PillMetrics.readyText)
+                .font(PillMetrics.captionFont)
+                .foregroundStyle(.white.opacity(0.92))
+                .fixedSize()
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// A dictation on its way the talk key went down over: the key's cap and "again to dictate", so a press that records
+/// nothing says what records.
+private struct PillSecondPressLabel: View {
+    let key: String
+
+    var body: some View {
+        HStack(spacing: PillMetrics.keyCapGap) {
+            Text(key)
+                .font(.system(size: PillMetrics.keyCapFontSize, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .fixedSize()
+                .padding(.horizontal, PillMetrics.keyCapPadding)
+                .padding(.vertical, 1)
+                .background {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(.white.opacity(0.16))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .strokeBorder(.white.opacity(0.22), lineWidth: 0.5)
+                        }
+                }
+            Text(PillMetrics.secondPressText)
                 .font(PillMetrics.captionFont)
                 .foregroundStyle(.white.opacity(0.92))
                 .fixedSize()

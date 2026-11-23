@@ -43,11 +43,12 @@ dictation; while texts are on their way, the keys go to the newest. Pressing fn 
 them out for it too. Change the keys (all but esc) in Shortcuts.
 
 You don't have to wait for the text. To start the next dictation while the last one is still being written, press fn
-twice and hold the second press (fn Space starts a hands-free one right away). The earlier one moves up onto a pill of
-its own, and each text is pasted as soon as it's ready, in the order you dictated. A text that's ready while an
-older one is still being written says "ready" on its pill; Paste now beside it pastes it first. Send turned on for
-one dictation turns it off on the ones before it, so Return is pressed once, after the last text. Esc
-cancels the dictation you're recording, or, when you're not recording, the newest one still on its way.
+twice and hold the second press (fn Space starts a hands-free one right away). Press fn once and the pill says "fn
+again to dictate", with a soft click. The earlier one moves up onto a smaller, paler pill of its own (point at it to
+see it full size, with its buttons), and each text is pasted as soon as it's ready, in the order you dictated. A text
+that's ready while an older one is still being written says "ready" on its pill; Paste now beside it pastes it first.
+Send turned on for one dictation turns it off on the ones before it, so Return is pressed once, after the last text.
+Esc cancels the dictation you're recording, or, when you're not recording, the newest one still on its way.
 
 Moved on before the text came? Click somewhere else, or switch to another app, after you stop and before the text is
 pasted, and it waits on a card instead, to paste or copy. The pill's outline turns dashed; click the pill to paste it
@@ -75,29 +76,25 @@ manager may still keep the selected text.
   letters, as it hears them. For punctuation, capitals or another language, dictate on Gemini.
 - **Gemini 3.8 Flash** runs in the cloud and is very accurate. It thinks before it writes, so it's slower than
   GigaAM.
-- **Gemini 4 Hydrogen** runs in the cloud too: Google's newer model in Flash's class. It's faster than Flash on long
-  dictations and costs about twice as much per token.
-- **Gemini 4 Neon** runs in the cloud too: Google's newest, between Hydrogen and Carbon in the Gemini 4 family. It
-  costs about 3.6 times as much as Flash per token, and Google says that will go up.
-- **Gemini 4 Carbon** runs in the cloud too: the top of Google's Gemini 4 family. It's slower than Flash and costs
-  about 2.7 times as much. When Google is busy, it can take a few minutes to start answering.
+- **Gemini 4 Neon** runs in the cloud too: Google's Gemini 4, newer than Flash. It costs about 3.6 times as much as
+  Flash per token, and Google says that will go up.
 
-Hydrogen, Neon and Carbon are off until you switch them on in Models.
+Neon is off until you switch it on in Models.
 
 On Gemini, press fn P (or click the wand on the pill) and it pastes the message you meant, without the false starts,
 detours and repeats. Press fn T (or click Translate) and it pastes what you said in the other language. Russian becomes English and English becomes
 Russian; pick another pair in General → Translate. With both on, you get the message you meant, translated.
 
-On GigaAM, fn P and fn T (the wand and Translate) work on the text you've selected instead: Gemini 3.8 Flash writes the result
-on a card, and Paste Here puts it in place of the selection.
+On GigaAM, fn P and fn T (the wand and Translate) work on the text you've selected instead: Gemini 3.8 Flash writes
+the result on a card, and Paste Here puts it in place of the selection.
 
 In Models:
 
 - **Your models** picks the model every dictation starts on (the dot), which models fn ⇥ steps through while you talk
   (the switches, in the order of the list, which you can drag), and each one's pill color. Each Gemini's row also
-  has a Reasoning menu, under its name: how long it thinks before it writes, Low, Medium or High (Flash and Hydrogen
-  start on Medium, Neon and Carbon on Low). Higher is slower and costs more. It applies to everything that model
-  does: dictations, Polish, Translate, files and History.
+  has a Reasoning menu, under its name: how long it thinks before it writes, Low, Medium or High (Flash starts on
+  Medium, Neon on Low). Higher is slower and costs more. It applies to dictations, Polish, Translate, selected text,
+  files and History; calls have their own in General → Calls.
 - **Hands-free** picks the model fn Space starts on.
 - **On this Mac** downloads GigaAM v3 and shows how it's doing. Delete it there once it's neither the main model nor
   switched on. Files of models the app no longer uses are listed there too, each with its size and Delete.
@@ -113,8 +110,9 @@ hands-free), GigaAM v3 takes its place; if it isn't downloaded yet, its row in M
 Transcripts they made stay in History under their names. Their files stay on your Mac until you delete them in
 Models → On this Mac. Parakeet through OpenRouter went earlier; its transcripts stay as "Parakeet v3 · Cloud".
 
-Gemini 4 Argon is gone too. Wherever you had picked it (your main model, fn ⇥, hands-free), Gemini 3.8 Flash
-takes its place, so there's nothing to change. Transcripts it made stay in History as "Gemini 4 Argon".
+Gemini 4 Hydrogen and Gemini 4 Carbon are gone too. Wherever you had picked one (your main model, fn ⇥, hands-free,
+calls), Gemini 4 Neon takes its place. Gemini 4 Argon went before them, and Gemini 3.8 Flash took its place.
+Transcripts they made stay in History under their names.
 
 Gemini can also go through another service you pay for, if it has an OpenAI-compatible API. Models → API keys →
 Provider picks one of the two, OpenRouter or Custom endpoint, for every Gemini request: dictations, Polish, Translate,

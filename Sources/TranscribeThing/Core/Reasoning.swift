@@ -10,8 +10,6 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
     /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
     case off = "none"
     case minimal, low, medium, high
-    /// Above High: Gemini 4 Neon's most, as the user's endpoint takes it ("xhigh").
-    case xhigh
 
     var title: String {
         switch self {
@@ -20,41 +18,35 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
         case .low: "Low"
         case .medium: "Medium"
         case .high: "High"
-        case .xhigh: "xHigh"
         }
     }
 }
 
 extension EngineID {
-    /// The levels the model can be asked to think at (the Reasoning menu on its row in Models, and General → Calls'
-    /// while it's the call model): Low, Medium and High for Gemini, and for Gemini 4 Neon xHigh too. No Gemini model is offered Minimal (the user's endpoint sends it as Low, Gemini 4 Hydrogen refuses
-    /// it: "Thinking level is unsupported", and whether Gemini 4 Neon takes it isn't known) nor None (Gemini 3.8 Flash
-    /// can't turn thinking off). Empty for models that don't reason, and for a retired one, which never runs.
+    /// The levels the model can be asked to think at (the Reasoning menu on its row in Models, and General → Calls'):
+    /// Low, Medium and High for Gemini 3.8 Flash and Gemini 4 Neon. Not Minimal (the user's endpoint sends it as Low,
+    /// and whether Neon takes it isn't known), nor None (Flash can't turn thinking off), nor xHigh, which Neon thinks
+    /// for minutes at. Empty for models that don't reason, and for a retired one, which never runs.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlash, .geminiHydrogen, .geminiCarbon: [.low, .medium, .high]
-        case .geminiNeon: [.low, .medium, .high, .xhigh]
-        case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: []
+        case .geminiFlash, .geminiNeon: [.low, .medium, .high]
+        case .parakeet, .gigaam, .parakeetCloud, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: []
         }
     }
 
-    /// The level the model thinks at until another is picked, each model its own: medium for Gemini 3.8 Flash (at high
-    /// it thought for about 18k tokens, 76 s, on a 1:48 recording), low for Gemini 4 Carbon, which is slower and
-    /// dearer to begin with, and medium for Gemini 4 Hydrogen: at low it answered about twice as fast but left about
-    /// 2.8 times as many filler words and repeats, which the prompt has it clean while it thinks (measured on the
-    /// user's dictations). Low for Gemini 4 Neon: the dearest of the four per token, and not yet tried on dictations.
-    /// nil for models that don't reason.
+    /// The level the model thinks at until another is picked, each model its own: Medium for Gemini 3.8 Flash (at high
+    /// it thought for about 18k tokens, 76 s, on a 1:48 recording), Low for Gemini 4 Neon, the dearer per token. nil
+    /// for models that don't reason, and for a retired one.
     var defaultReasoningEffort: ReasoningEffort? {
         switch self {
-        case .geminiFlash, .geminiHydrogen: .medium
-        case .geminiNeon, .geminiCarbon: .low
-        case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: nil
+        case .geminiFlash: .medium
+        case .geminiNeon: .low
+        case .parakeet, .gigaam, .parakeetCloud, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: nil
         }
     }
 
-    /// The level a call on the model thinks at until another is picked in General → Calls: Medium for every Gemini model
-    /// (Gemini 4 Neon at xHigh thought for about 50k tokens, 7 minutes, on a 51-second call, measured in November
-    /// 2026). nil for models that don't reason.
+    /// The level a call on the model thinks at until another is picked in General → Calls: Medium for every Gemini
+    /// model. nil for models that don't reason.
     var defaultCallReasoningEffort: ReasoningEffort? {
         defaultReasoningEffort == nil ? nil : .medium
     }
@@ -62,8 +54,7 @@ extension EngineID {
 
 /// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
 /// model goes at its level: dictation, Polish, Translate, file imports, History's versions, calls. One JSON object
-/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value:
-/// {"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium","geminiNeon":"low"}.
+/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value: {"geminiFlash":"medium","geminiNeon":"low"}.
 struct ReasoningEfforts: Equatable, Sendable {
     private var levels: [EngineID: ReasoningEffort] = [:]
     /// Calls' levels (`AppSettings.callReasoningEfforts`): a model not picked for calls is at its

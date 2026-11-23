@@ -1157,7 +1157,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(reloaded.reasoningEffort(for: .geminiFlash) == .low)
         #expect(reloaded.handsFreeModel == .gigaam)
         #expect(reloaded.lineup == settings.lineup)
-        #expect(reloaded.lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon] && reloaded.lineup.main == .gemini)
+        #expect(reloaded.lineup.order == [.gemini, .gigaam, .neon] && reloaded.lineup.main == .gemini)
         #expect(reloaded.lineup.cycle == [.gemini, .gigaam])
         #expect(reloaded.modelColors[.gemini] == .blue && reloaded.modelColors[.gigaam] == .teal)
         #expect(reloaded.switchHintShownCount == 2)
@@ -1198,7 +1198,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             let settings = AppSettings(defaults: defaults)
             #expect(settings.modelColors[.gemini] == .blue && settings.modelColors.parakeet == .graphite)
             let stored = defaults.data(forKey: SettingsKey.modelColors.defaultsKey).map { String(decoding: $0, as: UTF8.self) }
-            #expect(stored == #"{"carbon":"blue","gemini":"blue","gigaam":"green","hydrogen":"pink","neon":"orange","parakeet":"graphite"}"#,
+            #expect(stored == #"{"gemini":"blue","gigaam":"green","neon":"orange","parakeet":"graphite"}"#,
                     "the removed clean-up's color goes")
             #expect(AppSettings(defaults: defaults).modelColors == settings.modelColors, "a reload changes nothing")
             // Not an object at all: the defaults.
@@ -1211,7 +1211,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(ModelColors.default), as: UTF8.self)
-        #expect(json == #"{"carbon":"blue","gemini":"violet","gigaam":"green","hydrogen":"pink","neon":"orange","parakeet":"graphite"}"#)
+        #expect(json == #"{"gemini":"violet","gigaam":"green","neon":"orange","parakeet":"graphite"}"#)
         var colors = ModelColors.default
         colors[.gigaam] = .violet
         #expect(try JSONDecoder().decode(ModelColors.self, from: encoder.encode(colors)) == colors)
@@ -1273,8 +1273,8 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
             settings.modelsAddingSpace.remove(.gigaam)
             let stored = defaults.data(forKey: "tt.modelsAddingSpace").map { String(decoding: $0, as: UTF8.self) }
-            #expect(stored == #"["gemini","hydrogen","neon","carbon"]"#)
-            #expect(AppSettings(defaults: defaults).modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon],
+            #expect(stored == #"["gemini","neon"]"#)
+            #expect(AppSettings(defaults: defaults).modelsAddingSpace == [.gemini, .neon],
                     "migrated only once")
         }
     }
@@ -1413,14 +1413,14 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
     @Test func eachChoiceHasItsEngine() {
         #expect(ModelChoice.allCases.map(\.engine)
-                == [.gigaam, .geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
-        #expect(ModelChoice.allCases.map(\.rawValue) == ["gigaam", "gemini", "hydrogen", "neon", "carbon"])
+                == [.gigaam, .geminiFlash, .geminiNeon])
+        #expect(ModelChoice.allCases.map(\.rawValue) == ["gigaam", "gemini", "neon"])
         for engine in EngineID.offered { #expect(ModelChoice(engine: engine).engine == engine) }
         #expect(ModelChoice(engine: .parakeet) == .gigaam && ModelChoice(engine: .parakeetCloud) == .gigaam,
                 "an old Parakeet job reads as GigaAM, which took its place")
         #expect(ModelChoice(engine: .geminiPro) == .gemini && ModelChoice(engine: .geminiArgon) == .gemini)
-        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .hydrogen, .neon, .carbon])
-        #expect(ModelChoice.allCases.map(\.shortName) == ["GigaAM", "Flash", "Hydrogen", "Neon", "Carbon"])
+        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .neon])
+        #expect(ModelChoice.allCases.map(\.shortName) == ["GigaAM", "Flash", "Neon"])
     }
 
     /// The user's settings from 0.2.0 (clean-up off, Gemini on) become the lineup once; the old keys go. Clean-up's
@@ -1629,10 +1629,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 @Suite struct ModelLineupTests {
     @Test func theDefaultLineupStepsGigaAMThenGemini() {
         let lineup = ModelLineup.default
-        #expect(lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon] && lineup.main == .gigaam)
-        #expect(lineup.cycle == [.gigaam, .gemini], "Hydrogen, Neon and Carbon are listed, switched off")
+        #expect(lineup.order == [.gigaam, .gemini, .neon] && lineup.main == .gigaam)
+        #expect(lineup.cycle == [.gigaam, .gemini], "Neon is listed, switched off")
         #expect(lineup.steps == [.gemini])
-        #expect(ModelChoice.allCases == [.gigaam, .gemini, .hydrogen, .neon, .carbon],
+        #expect(ModelChoice.allCases == [.gigaam, .gemini, .neon],
                 "declaration order is the default order")
     }
 
@@ -1673,24 +1673,24 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     @Test func movingAModelReordersTheCycle() {
         var lineup = ModelLineup.default
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+        #expect(lineup.order == [.gemini, .gigaam, .neon])
         #expect(lineup.cycle == [.gigaam, .gemini], "from the main model, wrapping around")
         lineup.move(.gemini, to: 99)
-        #expect(lineup.order == [.gigaam, .hydrogen, .neon, .carbon, .gemini], "clamped to the end")
+        #expect(lineup.order == [.gigaam, .neon, .gemini], "clamped to the end")
         lineup.move(.gemini, to: -3)
-        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon], "clamped to the start")
+        #expect(lineup.order == [.gemini, .gigaam, .neon], "clamped to the start")
         lineup.move(.gemini, to: 1)
-        #expect(lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+        #expect(lineup.order == [.gigaam, .gemini, .neon])
     }
 
     @Test func aStoredLineupDecodesLeniently() throws {
         let json = #"{"main":"whisper","order":["gemini","whisper","gemini","gigaam"],"switchable":["gemini","x"]}"#
         let lineup = try JSONDecoder().decode(ModelLineup.self, from: Data(json.utf8))
-        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon], "unknown and duplicate dropped")
+        #expect(lineup.order == [.gemini, .gigaam, .neon], "unknown and duplicate dropped")
         #expect(lineup.main == .gigaam)
         #expect(lineup.switchable == [.gemini])
         let missing = try JSONDecoder().decode(ModelLineup.self, from: Data(#"{"main":"gemini","order":["gemini"],"switchable":[]}"#.utf8))
-        #expect(missing.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon] && missing.switchable.isEmpty,
+        #expect(missing.order == [.gemini, .gigaam, .neon] && missing.switchable.isEmpty,
                 "the missing appended, off")
         #expect(try JSONDecoder().decode(ModelLineup.self, from: Data("{}".utf8)).order == ModelChoice.allCases)
     }
@@ -1701,7 +1701,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(lineup), as: UTF8.self)
-        #expect(json == #"{"main":"gigaam","order":["gemini","gigaam","hydrogen","neon","carbon"],"switchable":["gemini"]}"#)
+        #expect(json == #"{"main":"gigaam","order":["gemini","gigaam","neon"],"switchable":["gemini"]}"#)
         #expect(try JSONDecoder().decode(ModelLineup.self, from: Data(json.utf8)) == lineup)
     }
 
@@ -1716,16 +1716,16 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
     @Test func modelChoiceNames() {
         #expect(ModelChoice.allCases.map(\.modelName)
-                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Neon", "Gemini 4 Carbon"])
+                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Neon"])
         #expect(ModelChoice.allCases.map(\.title) == ModelChoice.allCases.map(\.modelName))
-        #expect(ModelChoice.allCases.map(\.shortName) == ["GigaAM", "Flash", "Hydrogen", "Neon", "Carbon"])
+        #expect(ModelChoice.allCases.map(\.shortName) == ["GigaAM", "Flash", "Neon"])
         #expect(ModelChoice.allCases.map { $0.compactName }
-                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Neon", "Gemini 4 Carbon"])
+                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Neon"])
         #expect(ModelChoice.allCases.map { $0.chipName }
-                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Neon", "Gemini 4 Carbon"])
+                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Neon"])
         #expect(ModelChoice.allCases.map { $0.symbolName }
-                == ["character.bubble.fill", "sparkles", "drop.fill", "lightbulb.fill", "atom"])
-        #expect(ModelChoice.allCases.map { $0.isLocal } == [true, false, false, false, false])
-        #expect(ModelChoice.allCases.map { $0.isGemini } == [false, true, true, true, true])
+                == ["character.bubble.fill", "sparkles", "lightbulb.fill"])
+        #expect(ModelChoice.allCases.map { $0.isLocal } == [true, false, false])
+        #expect(ModelChoice.allCases.map { $0.isGemini } == [false, true, true])
     }
 }

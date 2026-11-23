@@ -306,8 +306,8 @@ enum ProcessingRig {
             try await waitUntil { requests.gemini.count == n }
         }
         #expect(rig.h.pill.stack.count == 4 && c.machine.activeJobs == 5)
-        #expect(PillStackMetrics.height(for: 4) == 3 * (PillStackMetrics.pillHeight + PillStackMetrics.gap)
-                + PillStackMetrics.moreHeight + PillStackMetrics.gap)
+        #expect(abs(PillStackMetrics.height(for: 4) - (PillStackMetrics.pillHeight + 2 * PillStackMetrics.compactHeight
+                + 4 * PillStackMetrics.gap + PillStackMetrics.moreHeight)) < 0.001)
         for gate in gates.values { gate.isOpen = true }
         try await waitUntil { rig.pasted.count == 5 && c.machine.activeJobs == 0 }
         #expect(rig.pasted == (1...5).map { "words \($0)" })

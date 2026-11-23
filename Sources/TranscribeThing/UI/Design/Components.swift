@@ -729,7 +729,7 @@ struct EngineIcon: View {
     }
 }
 
-/// A model's mark: its symbol (GigaAM's speech bubble, Flash's sparkles, Hydrogen's drop, Neon's lamp, Carbon's atom) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
+/// A model's mark: its symbol (GigaAM's speech bubble, Flash's sparkles, Neon's lamp) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
     var color: ModelColor
