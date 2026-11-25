@@ -2787,6 +2787,69 @@ private struct ClockedKeyboard {
         first.isOpen = true
     }
 
+    /// The second press tapped, not held: the new dictation isn't dropped as a stray tap. It goes on hands-free, with
+    /// the lock sound, on the model it started on (not hands-free's own), and a tap of fn finishes it.
+    @Test func aTappedSecondPressGoesHandsFreeOnItsModel() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        rig.h.settings.lineup.setSwitchable(.neon, true)
+        rig.h.settings.handsFreeModel = .neon
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        cues.played.removeAll()
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        rig.now += 0.2
+        kb.press(.fn).events.forEach(c.handle)
+        rig.now += 0.1
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(c.machine.isRecording && c.machine.mode == .handsFree, "a tap, and still recording")
+        #expect(cues.played.contains(.start) && cues.played.last == .lock)
+        #expect(rig.h.pill.sessionModel == .gemini, "the model it started on, not hands-free's Neon")
+        rig.now += 2
+        kb.press(.fn).events.forEach(c.handle)
+        rig.now += 0.1
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(!c.machine.isRecording, "a tap of fn finishes it")
+        try await waitUntil { requests.made.count == 2 }
+        #expect(requests.made.last?.engine == .geminiFlash)
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 }
+    }
+
+    /// The second press held: push-to-talk, as any hold, transcribed once fn is up.
+    @Test func aHeldSecondPressIsPushToTalk() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        rig.now += 0.2
+        kb.press(.fn).events.forEach(c.handle)
+        c.send(.timer(.arming))
+        rig.now += 1.5
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(!c.machine.isRecording)
+        try await waitUntil { requests.made.count == 2 }
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 }
+    }
+
     /// After the half second, the next fn is aimed again: nothing records.
     @Test func afterTheWindowTheNextPressAimsAgain() async throws {
         let first = RequestGate()

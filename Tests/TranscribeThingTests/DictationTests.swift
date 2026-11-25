@@ -998,18 +998,10 @@ final class FakeRecorder: DictationRecorder {
         #expect(notice.actions.map(\.kind) == [.retry])
     }
 
-    /// An engine that answers with no text heard no speech: exactly what a speechless recording gets before any
-    /// engine, and nothing is kept. Compared through the Never-mode notice (the pill's words are covered above).
+    /// An engine that answers with no text heard no speech: "No speech detected", and nothing is kept. Compared
+    /// through the Never-mode notice (the pill's words are covered above).
     @Test func emptyTextIsSilenceNotAnError() async throws {
-        let preflight = Self.make()
-        preflight.settings.pillMode = .never
-        preflight.recorder.next = Recording(samples: Array(repeating: 0.01, count: 32_000),
-                                            speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))
-        preflight.controller.send(.handsFreeToggle)
-        preflight.controller.send(.pillStop)
-        try await waitUntil { preflight.controller.machine.activeJobs == 0 && !preflight.toasts.notices.isEmpty }
-        let expected = try #require(preflight.toasts.notices.first)
-        #expect(preflight.pill.visiblePhase == .error)
+        let expected = AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil)
 
         for engine in EngineID.offered {
             let h = Self.make(keyStatus: .valid(KeyInfo()))
@@ -1149,16 +1141,20 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.visiblePhase == .error)
     }
 
-    @Test func speechlessRecordingShowsNoSpeechAndNoHistory() async throws {
+    /// A recording the level check hears little voice in (a voice in a noisy café) goes to the model all the same:
+    /// the model hears it, and it's pasted.
+    @Test func aRecordingWithLittleVoiceStillGoesToTheModel() async throws {
         let h = Self.make()
+        var pasted: [String] = []
         h.recorder.next = Recording(samples: Array(repeating: 0.01, count: 32_000),
-                                    speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))
+                                    speech: SpeechStats(voicedSeconds: 0.05, peakDBFS: -40, isSilent: false))
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "тихо", engine: engine, processingTime: 0.1) }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         h.controller.send(.handsFreeToggle)
         h.controller.send(.pillStop)
-        try await waitUntil { h.controller.machine.activeJobs == 0 && h.pill.errorMessage != nil }
-        #expect(h.pill.errorMessage == PillMetrics.noSpeechText)
-        #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
-        #expect(h.history.entries.isEmpty)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
+        #expect(pasted == ["тихо"] && h.pill.errorMessage == nil)
+        #expect(h.history.entries.first?.status == .success)
     }
 
     @Test func missingModelRefusesHandsFreeImmediately() {
@@ -1422,7 +1418,10 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.machine.capture.isArming && h.pill.visiblePhase == .listening)
         #expect(h.pill.stack.count == 1 && h.pill.stack.first?.count == count, "it moved up with its count")
         h.controller.handle(.pttUp)
-        #expect(h.controller.machine.capture == .idle, "a tap is no dictation")
+        #expect(h.controller.machine.mode == .handsFree, "a tapped second press is a dictation all the same: hands-free")
+        #expect(h.pill.stack.count == 1)
+        h.controller.handle(.cancel)
+        #expect(h.controller.machine.capture == .idle)
         #expect(h.pill.visiblePhase == .processing && h.pill.stack.isEmpty && h.pill.tokenCount == count)
 
         now = 107

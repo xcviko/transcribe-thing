@@ -158,6 +158,9 @@ final class DictationController {
     @ObservationIgnored private var talkKeyAim: TalkKeyAim?
     /// The talk key's press now down is an aimed one: its release (or interruption) ends the aim, never a recording.
     @ObservationIgnored private var pressIsAimed = false
+    /// When the second press after an aimed one went down and started a dictation: let go within the tap threshold,
+    /// it was a tap, and the dictation goes on hands-free instead of folding away (`releaseSecondPress`).
+    @ObservationIgnored private var secondPressDownAt: TimeInterval?
     @ObservationIgnored private var aimTask: Task<Void, Never>?
     /// Brings up the pill's "fn again to dictate" (`PillModel.secondPressKey`), with the light start sound, once an
     /// aimed press is held `secondPressHintDelay` without a key.
@@ -273,7 +276,6 @@ final class DictationController {
     @ObservationIgnored var retainedSecondsLimit: TimeInterval = 30 * 60
     private static let undoMinimumDuration: TimeInterval = 1
     private static let saveCancelledMinimumDuration: TimeInterval = 20
-    private static let minimumVoicedSeconds = 0.25
     /// Speech a recording a key took over must hold to stay for Undo (`Input.discard`).
     private static let takenOverKeepsVoicedSeconds = 1.0
     /// The same failure again within this long updates its notice silently.
@@ -362,10 +364,12 @@ final class DictationController {
         switch event {
         case .pttDown:
             pressTakenByKey = false
+            secondPressDownAt = nil
             if let released = talkKeyAim?.releasedAt, clock() - released < secondPressWindow {
                 // The second press: a new dictation after all.
                 endAim()
                 send(.pttDown)
+                if machine.mode == .pushToTalk { secondPressDownAt = clock() }
             } else if aimsAtDictationsOnTheirWay {
                 aim()
             } else {
@@ -383,9 +387,10 @@ final class DictationController {
             heldRelease = .pttInterrupted
         case .pttUp:
             pressTakenByKey = false
-            send(.pttUp)
+            if !releaseSecondPress() { send(.pttUp) }
         case .pttInterrupted:
             pressTakenByKey = false
+            secondPressDownAt = nil
             send(.pttInterrupted)
         case .handsFreeToggle:
             // fn Space off an aimed press: hands-free starts at once, there's no mistaking it for a key of the aim.
@@ -612,6 +617,19 @@ final class DictationController {
         stateDidChange()
     }
 
+    /// The second press after an aimed one let go: held, it was push-to-talk and ends as one (false: send the release
+    /// on). A tap means a new dictation all the same, so it isn't dropped as a stray tap would be: it goes on
+    /// hands-free, on the model it started on (not hands-free's own: it's the same dictation, the key just isn't held),
+    /// and a tap of the key finishes it, as hands-free's always does.
+    private func releaseSecondPress() -> Bool {
+        guard let downAt = secondPressDownAt else { return false }
+        secondPressDownAt = nil
+        guard machine.mode == .pushToTalk, clock() - downAt < machine.config.tapThreshold else { return false }
+        DiagnosticLog.shared.event(.dictation, "talkKey.secondTapHandsFree")
+        send(.handsFreeToggle, keepsModel: true)
+        return true
+    }
+
     /// The aimed press ended by its chord (fn Space, Esc): no release follows.
     private func endPressAim() {
         guard pressIsAimed || talkKeyAim != nil else { return }
@@ -639,7 +657,9 @@ final class DictationController {
         return keys
     }
 
-    func send(_ input: DictationMachine.Input) {
+    /// `keepsModel`: going hands-free leaves the dictation on its model instead of switching to hands-free's own (a
+    /// tapped second press, `releaseSecondPress`).
+    func send(_ input: DictationMachine.Input, keepsModel: Bool = false) {
         let wasArming = machine.capture.isArming
         let wasHandsFree = machine.mode == .handsFree
         let wasRecording = machine.isRecording
@@ -655,7 +675,7 @@ final class DictationController {
         // Hands-free from the key or the pill; an Undo goes on with the model it had. Before the mic
         // opens, so what's checked is whether the hands-free model can take the dictation.
         let entersHandsFree = !wasHandsFree && machine.mode == .handsFree && !input.isResume
-        if entersHandsFree { switchToHandsFreeModel() }
+        if entersHandsFree, !keepsModel { switchToHandsFreeModel() }
         var startsAfterRefusal = false
         if let refusal = deferredRefusal {
             if entersHandsFree {
@@ -937,15 +957,12 @@ final class DictationController {
         }
         // Only now that the tail is captured: the cue stays out of the recording.
         if job.playsStopCue { playCue(.stop) }
-        // Whether music on the speakers was taken out of the mic (`LiveEchoCanceller`), and by how much.
-        let echo = recording.echo
         DiagnosticLog.shared.event(.dictation, "dictation.stopped", [
             "seconds": recording.duration, "voiced": recording.speech.voicedSeconds,
-            "aec": echo?.status.rawValue, "aecSeconds": echo.flatMap { $0.seconds > 0 ? $0.seconds : nil },
-            "echoReductionDB": echo?.reductionDB])
-        guard passesPreflight(recording, model: ModelChoice(engine: job.engine)) else {
+            "peakDBFS": (Double(recording.speech.peakDBFS) * 10).rounded() / 10])
+        guard passesPreflight(recording) else {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
-                "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])
+                "engine": job.engine, "outcome": "silent", "sent": false])
             discardJournal(of: recording.id)
             queue.removeAll { $0 === job }
             _ = machine.handle(.jobEnded, now: clock())
@@ -957,18 +974,14 @@ final class DictationController {
         stateDidChange()
     }
 
-    /// Rejects flat or speechless recordings before any engine (or Gemini bill) sees them.
-    private func passesPreflight(_ recording: Recording, model: ModelChoice) -> Bool {
-        if recording.speech.isSilent {
-            postFailure(AppError.microphoneSilent.notice(recordingID: nil, fallbackEngine: nil))
-            flashError()
-            return false
-        }
-        if recording.speech.voicedSeconds < Self.minimumVoicedSeconds {
-            reportNoSpeech(model: model)
-            return false
-        }
-        return true
+    /// Rejects a flat recording (a muted, disconnected or blocked mic) before any engine sees it. Anything else goes
+    /// to the model, however little of it sounds like speech: in a noisy café the model hears a voice a level check
+    /// takes for noise, and it says itself when it heard none ("No speech detected").
+    private func passesPreflight(_ recording: Recording) -> Bool {
+        guard recording.speech.isSilent else { return true }
+        postFailure(AppError.microphoneSilent.notice(recordingID: nil, fallbackEngine: nil))
+        flashError()
+        return false
     }
 
     /// "No speech detected", every time: said inside the pill, in place of the error glyph and without the shake.

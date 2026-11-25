@@ -17,10 +17,6 @@ enum CaptureSessionEvent: Sendable {
 /// from the same buffers) and fed to the level meter, and self-healing across format changes, dead devices and stalls
 /// (the recording keeps growing across rebuilds).
 ///
-/// With `echo`, what the Mac plays is taken out of the mic as it comes (`LiveEchoCanceller`), before the level meter,
-/// the recording and everything that reads it: the session starts the echo's checks and tap as it starts, and lets
-/// them go as it shuts down. Only the 16 kHz audio goes through it.
-///
 /// Threading: device work runs on a private serial queue (Bluetooth starts can block for seconds);
 /// buffers arrive on the input's delivery thread, which only holds `box`'s lock briefly; public methods
 /// are safe from any thread. Nothing here is main-actor isolated, so no closure built here can trap when
@@ -59,7 +55,6 @@ final class CaptureSession: @unchecked Sendable {
 
     private let meter: LevelMeter?
     private let hardware: Hardware
-    private let echo: DictationEcho?
     private let onEvent: @Sendable (CaptureSessionEvent) -> Void
     private let control = DispatchQueue(label: "dev.transcribe-thing.audio.capture", qos: .userInitiated)
     private let listenerQueue = DispatchQueue(label: "dev.transcribe-thing.audio.capture.listeners", qos: .userInitiated)
@@ -77,7 +72,7 @@ final class CaptureSession: @unchecked Sendable {
     private var rebuildForced = false
 
     init(device: CoreAudioHAL.InputRecord, options: Options, meter: LevelMeter?, hardware: Hardware = .live,
-         echo: DictationEcho? = nil, onEvent: @escaping @Sendable (CaptureSessionEvent) -> Void) {
+         onEvent: @escaping @Sendable (CaptureSessionEvent) -> Void) {
         self.options = options
         self.meter = meter
         self.hardware = hardware
@@ -86,26 +81,15 @@ final class CaptureSession: @unchecked Sendable {
         let now = AudioClock.now()
         self.startedAt = now
         self.lastRebuildAt = now
-        let echo = options.keepsSamples ? echo : nil
-        self.echo = echo
-        let canceller = echo.map { echo in LiveEchoCanceller(origin: now) { echo.drain() } }
-        self.box = CaptureBox(device: device.device, keepsSamples: options.keepsSamples, canceller: canceller,
+        self.box = CaptureBox(device: device.device, keepsSamples: options.keepsSamples,
                               listeningRate: options.keepsSamples ? options.listeningRate : nil)
     }
 
     // MARK: Public API (any thread)
 
     func start() {
-        echo?.start()
         control.async { self.startOnQueue() }
         armStartTimeout()
-    }
-
-    /// Whether what the Mac played was taken out of the mic, once the session has finished; nil without `echo`.
-    var echoReport: EchoCancellationReport? {
-        guard let echo else { return nil }
-        let canceller = box.withLock { $0.cancellerReport }
-        return canceller.map { EchoCancellationReport(echo: echo.status, canceller: $0) }
     }
 
     /// Reports `.noAudio` if no buffer arrives within `firstBufferTimeout`. Timed on another queue: a
@@ -194,7 +178,6 @@ final class CaptureSession: @unchecked Sendable {
             }
             // A stop that arrived while the device was starting still waits for its (now empty) audio.
             pending?([])
-            echo?.stop()
             if shouldReport { onEvent(.startFailed(Self.describe(error, device: initialRecord.device))) }
             return
         }
@@ -245,7 +228,6 @@ final class CaptureSession: @unchecked Sendable {
     }
 
     private func shutdownOnQueue() {
-        echo?.stop()
         isRunning = false
         watchdog?.cancel()
         watchdog = nil
@@ -346,7 +328,6 @@ final class CaptureSession: @unchecked Sendable {
 
     private func loseDevice() {
         Log.audio.error("Capture lost its device")
-        echo?.stop()
         watchdog?.cancel()
         watchdog = nil
         teardownInputOnQueue()
@@ -457,10 +438,8 @@ final class CaptureBox: @unchecked Sendable {
     private let lock = NSLock()
     private var state: CaptureState
 
-    init(device: AudioInputDevice, keepsSamples: Bool, canceller: LiveEchoCanceller? = nil,
-         listeningRate: Double? = nil) {
+    init(device: AudioInputDevice, keepsSamples: Bool, listeningRate: Double? = nil) {
         state = CaptureState(device: device, keepsSamples: keepsSamples, listeningRate: listeningRate)
-        state.canceller = canceller
     }
 
     func withLock<R>(_ body: (inout CaptureState) throws -> R) rethrows -> R {
@@ -506,13 +485,6 @@ struct CaptureState {
     var tailCompletion: Completion?
     /// Output frames produced since the session began (monitoring discards them, this keeps counting).
     private(set) var totalFrames = 0
-    /// Frames out of the resampler: ahead of `totalFrames` by what the echo canceller still holds. Output frame `g` is
-    /// the moment of resampled frame `g`, the canceller only delays it.
-    private var rawFrames = 0
-    /// Takes what the Mac plays out of the resampled mic (`LiveEchoCanceller`); nil: the mic as it comes.
-    var canceller: LiveEchoCanceller?
-    /// The canceller's figures once the state has finished.
-    private(set) var cancellerReport: LiveEchoCanceller.Report?
     private var ducks: [DuckWindow] = []
     /// Starts of continuous stretches of capture: (global output frame, capture time). Output frame `g`
     /// was captured at `anchor.time + (g - anchor.index) / 16 kHz` for the latest anchor at or before `g`.
@@ -558,7 +530,7 @@ struct CaptureState {
                 appendListening { try $0.flush(into: &$1) }
             }
             if formatChanged || expectedChunkStart.map({ abs(chunkStart - $0) > 0.004 }) ?? true {
-                anchors.append((rawFrames, chunkStart))
+                anchors.append((totalFrames, chunkStart))
             }
             expectedChunkStart = chunkStart + Double(input.frameLength) / rate
             appendOutput { try $0.process(input, into: &$1) }
@@ -597,17 +569,8 @@ struct CaptureState {
         isLive = false
         if !discard, keepsSamples {
             appendOutput { try $0.flush(into: &$1) }
-            if let rest = canceller?.flush(), !rest.isEmpty {
-                // What the canceller held back: ducked like the rest.
-                samples += rest
-                totalFrames += rest.count
-                let range = totalFrames - rest.count..<totalFrames
-                for window in ducks where overlaps(window, range) { apply(window, globalRange: range) }
-            }
             appendListening { try $0.flush(into: &$1) }
         }
-        cancellerReport = canceller?.report
-        canceller = nil
         resampler.reset()
         listeningResampler?.reset()
         // What's left at the listening rate stays for `takeListening`, unless it's thrown away.
@@ -667,29 +630,13 @@ struct CaptureState {
     }
 
     private mutating func appendOutput(_ body: (StreamingResampler, inout [Float]) throws -> Void) {
-        guard let canceller else {
-            let before = samples.count
-            do {
-                try body(resampler, &samples)
-            } catch {
-                Log.audio.error("Dropped an audio chunk the converter rejected")
-            }
-            totalFrames += samples.count - before
-            rawFrames = totalFrames
-            return
-        }
-        var raw: [Float] = []
+        let before = samples.count
         do {
-            try body(resampler, &raw)
+            try body(resampler, &samples)
         } catch {
             Log.audio.error("Dropped an audio chunk the converter rejected")
         }
-        guard !raw.isEmpty else { return }
-        let start = time(ofFrame: rawFrames)
-        rawFrames += raw.count
-        let cleaned = canceller.process(raw, at: start)
-        samples += cleaned
-        totalFrames += cleaned.count
+        totalFrames += samples.count - before
     }
 
     private func overlaps(_ window: DuckWindow, _ range: Range<Int>) -> Bool {

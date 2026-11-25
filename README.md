@@ -43,24 +43,18 @@ dictation; while texts are on their way, the keys go to the newest. Pressing fn 
 them out for it too. Change the keys (all but esc) in Shortcuts.
 
 You don't have to wait for the text. To start the next dictation while the last one is still being written, press fn
-twice and hold the second press (fn Space starts a hands-free one right away). Press fn once and the pill says "fn
-again to dictate", with a soft click. The earlier one moves up onto a smaller, paler pill of its own (point at it to
-see it full size, with its buttons), and each text is pasted as soon as it's ready, in the order you dictated. A text
-that's ready while an older one is still being written says "ready" on its pill; Paste now beside it pastes it first.
-Send turned on for one dictation turns it off on the ones before it, so Return is pressed once, after the last text.
-Esc cancels the dictation you're recording, or, when you're not recording, the newest one still on its way.
+twice: hold the second press and talk, or tap it and talk hands-free, on the same model, until a tap of fn finishes
+(fn Space starts a hands-free one right away too). Press fn once and the pill says "fn again to dictate", with a soft
+click. The earlier one moves up onto a smaller, paler pill of its own (point at it to see it full size, with its
+buttons), and each text is pasted as soon as it's ready, in the order you dictated. A text that's ready while an older
+one is still being written says "ready" on its pill; Paste now beside it pastes it first. Send turned on for one
+dictation turns it off on the ones before it, so Return is pressed once, after the last text. Esc cancels the
+dictation you're recording, or, when you're not recording, the newest one still on its way.
 
 Moved on before the text came? Click somewhere else, or switch to another app, after you stop and before the text is
 pasted, and it waits on a card instead, to paste or copy. The pill's outline turns dashed; click the pill to paste it
 after all. Turn this off in General → Pasting → Hold the paste after a click. Either way, Send presses Return only
 where you dictated: a click elsewhere or a switch to another app before the paste turns it off for that dictation.
-
-If music or a video plays on your Mac's speakers while you dictate, the app takes it out of what your microphone hears,
-so you don't have to talk over it and the song's words mostly stay out of the transcript. This needs the System Audio
-Recording permission, which the app never asks for on its own: click Allow next to it in General → Permissions. If
-you said no before, turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, under System
-Audio Recording Only. The first second after you start may still pick up the music. With headphones, or without the permission, your microphone is
-recorded as it is.
 
 Pasting leaves your clipboard as it was. To copy a transcript, use Copy Last Transcript in the menu bar or Copy in
 History.

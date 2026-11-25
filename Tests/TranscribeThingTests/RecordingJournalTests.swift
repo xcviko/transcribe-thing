@@ -554,7 +554,7 @@ func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
         #expect(rig.h.history.entry(id: canceled.id)?.status == .success)
     }
 
-    /// A quick tap, a press too short to keep, and a recording without speech are thrown away with their journals.
+    /// A quick tap, a press too short to keep, and a recording from a dead mic are thrown away with their journals.
     @Test func whatIsThrownAwayTakesItsJournalAlong() async throws {
         let rig = Rig()
         rig.h.recorder.next = Recording(samples: speechLike(seconds: 2),
@@ -570,9 +570,9 @@ func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
         try await rig.settled()
         #expect(rig.journalFiles.isEmpty, "a cancel shorter than Undo keeps")
 
-        rig.hold(Array(repeating: 0.001, count: 32_000), voiced: 0.1)
+        rig.hold(Array(repeating: 0, count: 32_000), voiced: 0)
         try await rig.settled()
-        #expect(rig.journalFiles.isEmpty, "no speech: never sent to a model")
+        #expect(rig.journalFiles.isEmpty, "a dead mic: never sent to a model")
         #expect(rig.h.history.entries.isEmpty)
     }
 }

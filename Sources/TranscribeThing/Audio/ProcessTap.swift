@@ -39,13 +39,12 @@ enum ProcessTap {
 enum TapTarget: Equatable, Sendable {
     /// The sound of these HAL process objects, mixed: every process of the call app (a browser's helpers included).
     case processes([AudioObjectID])
-    /// Everything the Mac plays but this app's own sounds: a manual recording, and what a dictation takes out of the
-    /// mic (`DictationEcho`).
+    /// Everything the Mac plays but this app's own sounds: a manual recording.
     case everythingButThisApp
 }
 
 /// Other apps' sound: a CoreAudio process tap of a call app's processes (a call's other side), or of everything the
-/// Mac plays but this app (a manual recording, a dictation's echo canceller), mixed to mono, in a private aggregate device of its own that `HALDeviceInput` reads like any input,
+/// Mac plays but this app (a manual recording), mixed to mono, in a private aggregate device of its own that `HALDeviceInput` reads like any input,
 /// resampled to 16 kHz. Each stretch is stamped with the host time its IO cycle carries, so the track lines up with
 /// the mic's.
 ///
